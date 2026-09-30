@@ -35,11 +35,18 @@ interface SapoVariant {
   inventory_quantity?: number | null;
   unit?: string | null;
   image_id?: number | null;
+  /** 1-based order within the product; used to pick a single representative variant. */
+  position?: number | null;
 }
 interface SapoProduct {
   id: number;
   name?: string | null;
   content?: string | null;
+  /**
+   * "active" | "draft" (observed on a live store). Note `published_on` is a separate field and is
+   * null even on the product this PoC has been selling all along, so it is not used as a filter.
+   */
+  status?: string | null;
   variants?: SapoVariant[] | null;
   images?: { id: number; src?: string | null }[] | null;
   image?: { src?: string | null } | null;
@@ -83,6 +90,36 @@ export interface SapoCatalogEntry {
 }
 
 /**
+ * Map one Sapo product + variant to a catalog entry. Price, stock, sku and unit all live on the
+ * **variant**, not the product — that is why a cart line is keyed by variantId.
+ */
+function toCatalogEntry(product: SapoProduct, variant: SapoVariant): SapoCatalogEntry {
+  const price = toVnd(variant.price);
+  const compare = toVnd(variant.compare_at_price);
+  const image =
+    product.images?.find((i) => i.id === variant.image_id)?.src ?? product.image?.src ?? product.images?.[0]?.src;
+  return {
+    productId: product.id,
+    variantId: variant.id,
+    name: product.name?.trim() || `Variant ${variant.id}`,
+    sku: (variant.sku ?? "").trim(),
+    priceVnd: price,
+    compareAtPriceVnd: compare > price ? compare : undefined,
+    stock: typeof variant.inventory_quantity === "number" ? variant.inventory_quantity : 0,
+    unit: variant.unit?.trim() || undefined,
+    description: htmlToText(product.content),
+    imageUrl: image ?? undefined,
+  };
+}
+
+/** Sapo orders variants by `position`; a missing position sorts last rather than first. */
+function firstVariant(product: SapoProduct): SapoVariant | undefined {
+  const variants = (product.variants ?? []).filter((v) => typeof v.id === "number");
+  if (variants.length === 0) return undefined;
+  return [...variants].sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))[0];
+}
+
+/**
  * Read the catalog entry for cfg.variantId. Sapo has no documented
  * GET /admin/variants/{id}.json for private apps, so we list products and pick the variant —
  * fine for this PoC's single-product catalog.
@@ -92,25 +129,30 @@ export async function fetchCatalogEntry(cfg: SapoConfig, variantId: number): Pro
   for (const product of data.products ?? []) {
     for (const variant of product.variants ?? []) {
       if (variant.id !== variantId) continue;
-      const price = toVnd(variant.price);
-      const compare = toVnd(variant.compare_at_price);
-      const image =
-        product.images?.find((i) => i.id === variant.image_id)?.src ?? product.image?.src ?? product.images?.[0]?.src;
-      return {
-        productId: product.id,
-        variantId: variant.id,
-        name: product.name?.trim() || `Variant ${variant.id}`,
-        sku: (variant.sku ?? "").trim(),
-        priceVnd: price,
-        compareAtPriceVnd: compare > price ? compare : undefined,
-        stock: typeof variant.inventory_quantity === "number" ? variant.inventory_quantity : 0,
-        unit: variant.unit?.trim() || undefined,
-        description: htmlToText(product.content),
-        imageUrl: image ?? undefined,
-      };
+      return toCatalogEntry(product, variant);
     }
   }
   throw new SapoApiError(`No Sapo variant with id ${variantId} (check SAPO_VARIANT_ID)`);
+}
+
+/**
+ * Every sellable product, one entry each: the first variant by position. Products with no variant
+ * are skipped, and only `status === "active"` is listed, so a draft never reaches the storefront.
+ *
+ * One entry per product is a deliberate PoC limit — a product with real options would need a
+ * variant picker. Because entries already carry variantId, adding that later does not change the
+ * shape of a cart line.
+ */
+export async function fetchCatalogEntries(cfg: SapoConfig): Promise<SapoCatalogEntry[]> {
+  const data = (await sapoFetch(cfg, "/admin/products.json?limit=250")) as { products?: SapoProduct[] };
+  const entries: SapoCatalogEntry[] = [];
+  for (const product of data.products ?? []) {
+    if ((product.status ?? "active").trim().toLowerCase() !== "active") continue;
+    const variant = firstVariant(product);
+    if (variant === undefined) continue;
+    entries.push(toCatalogEntry(product, variant));
+  }
+  return entries;
 }
 
 export interface SapoOrderInput {

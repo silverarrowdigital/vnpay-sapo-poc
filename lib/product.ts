@@ -22,6 +22,11 @@ export const MAX_QUANTITY = 10;
 export interface DisplayProduct {
   name: string;
   sku: string;
+  /**
+   * Sapo variant id, absent in fallback mode. Price and stock live on the variant, so this — not a
+   * product id — is what identifies a line the customer is buying.
+   */
+  variantId?: number;
   priceVnd: number;
   /** Sapo compare_at_price: the struck-through "was" price, when higher than priceVnd. */
   compareAtPriceVnd?: number;
