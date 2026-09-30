@@ -189,3 +189,38 @@ dl.kv dd { margin: 0; word-break: break-all; }
   .cart-line { grid-template-columns: 1fr auto; }
   .cart-name { grid-column: 1 / -1; }
 }
+
+/* ---- Catalog tile as a link ------------------------------------------------ */
+
+.grid > li { display: flex; }
+.card.product.tile {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  text-decoration: none; color: var(--text);
+}
+.card.product.tile:hover { border-color: var(--accent); }
+.tile-name { font-size: 17px; font-weight: 700; margin: 2px 0; }
+.tile .price { margin: 6px 0; }
+.tile-cta { margin-top: auto; padding-top: 10px; font-size: 13px; color: var(--accent); }
+
+/* ---- Product detail ------------------------------------------------------- */
+
+.crumb { margin: 16px 0 0; font-size: 14px; }
+.crumb a { color: var(--accent); text-decoration: none; }
+
+.detail { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.detail-media {
+  aspect-ratio: 1 / 1; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.detail-media img { width: 100%; height: 100%; object-fit: cover; }
+.detail-body h1 { font-size: 24px; margin: 4px 0 0; }
+
+.add-form { display: grid; gap: 12px; margin-top: 20px; }
+.add-form .qty { display: grid; gap: 4px; }
+.add-form .qty label { font-weight: 600; font-size: 14px; }
+
+/* One column at phone width: the image above the details rather than beside them. */
+@media (max-width: 600px) {
+  .detail { grid-template-columns: 1fr; }
+}

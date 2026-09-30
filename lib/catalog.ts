@@ -24,6 +24,7 @@ function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
     name: entry.name,
     sku: entry.sku || PRODUCT.sku,
     variantId: entry.variantId,
+    alias: entry.alias,
     priceVnd: entry.priceVnd,
     compareAtPriceVnd: entry.compareAtPriceVnd,
     stock: entry.stock,
@@ -46,6 +47,23 @@ export async function getDisplayProducts(): Promise<CatalogProduct[]> {
     return [toCatalogProduct(await fetchCatalogEntry(cfg, cfg.variantId))];
   }
   return (await fetchCatalogEntries(cfg)).map(toCatalogProduct);
+}
+
+/**
+ * One product by the handle in its URL: Sapo's `alias`, or the variant id as a fallback so a
+ * product without an alias is still reachable. `null` when nothing matches, which the page turns
+ * into a 404.
+ *
+ * Filtering the catalog list rather than fetching one product keeps us on the single Sapo endpoint
+ * this code has verified against a live store.
+ */
+export async function getProductByHandle(handle: string): Promise<CatalogProduct | null> {
+  const products = await getDisplayProducts();
+  const byAlias = products.find((p) => p.alias === handle);
+  if (byAlias !== undefined) return byAlias;
+  const asVariantId = Number(handle);
+  if (!Number.isSafeInteger(asVariantId) || asVariantId <= 0) return null;
+  return products.find((p) => p.variantId === asVariantId) ?? null;
 }
 
 /** Reads one live product. Throws if Sapo is configured but unreachable. */

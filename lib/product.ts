@@ -42,6 +42,8 @@ export interface DisplayProduct {
    * product id — is what identifies a line the customer is buying.
    */
   variantId?: number;
+  /** Sapo's URL slug. Used for the product page's address when present. */
+  alias?: string;
   priceVnd: number;
   /** Sapo compare_at_price: the struck-through "was" price, when higher than priceVnd. */
   compareAtPriceVnd?: number;
@@ -61,6 +63,14 @@ export interface DisplayProduct {
  * these, so nothing downstream has to handle a product it could not put in a cart.
  */
 export type CatalogProduct = DisplayProduct & { variantId: number };
+
+/**
+ * Address of a product's page. The readable slug is preferred, with the variant id as the fallback
+ * so a product Sapo never gave an alias still has a working link. The route resolves both.
+ */
+export function productHref(p: CatalogProduct): string {
+  return `/products/${encodeURIComponent(p.alias ?? String(p.variantId))}`;
+}
 
 /** true when the product cannot be bought right now. */
 export function isSoldOut(p: DisplayProduct): boolean {

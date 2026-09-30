@@ -1,7 +1,7 @@
-import AddToCartButton from "@/components/AddToCartButton";
+import Link from "next/link";
 import { getDisplayProducts } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, isSoldOut, maxOrderableQuantity } from "@/lib/product";
+import { formatVnd, isSoldOut, productHref } from "@/lib/product";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
 
@@ -44,36 +44,36 @@ export default async function CatalogPage() {
         {products.map((product) => {
           const soldOut = isSoldOut(product);
           return (
-            <li className="card product" key={product.variantId ?? product.sku}>
-              {/* Sapo products may carry no image at all, so the tile always has a frame to sit in. */}
-              <div className="thumb" aria-hidden="true">
-                {product.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
-                  <img src={product.imageUrl} alt="" />
-                ) : (
-                  <span className="thumb-empty">No image</span>
+            <li key={product.variantId}>
+              {/* The whole tile is the link; quantity and adding to the cart live on the product page. */}
+              <Link className="card product tile" href={productHref(product)}>
+                <span className="thumb" aria-hidden="true">
+                  {product.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
+                    <img src={product.imageUrl} alt="" />
+                  ) : (
+                    <span className="thumb-empty">No image</span>
+                  )}
+                </span>
+
+                <span className="muted">SKU: {product.sku}</span>
+                <span className="tile-name">{product.name}</span>
+
+                <span className="price">
+                  {formatVnd(product.priceVnd)}
+                  {product.compareAtPriceVnd !== undefined && (
+                    <span className="was">{formatVnd(product.compareAtPriceVnd)}</span>
+                  )}
+                </span>
+
+                {product.stock !== null && (
+                  <span className={soldOut ? "stock out" : "stock in"}>
+                    {soldOut ? "Out of stock" : `${product.stock} ${product.unit ?? "in stock"} available`}
+                  </span>
                 )}
-              </div>
 
-              <p className="muted">SKU: {product.sku}</p>
-              <h2>{product.name}</h2>
-
-              <p className="price">
-                {formatVnd(product.priceVnd)}
-                {product.compareAtPriceVnd !== undefined && (
-                  <span className="was">{formatVnd(product.compareAtPriceVnd)}</span>
-                )}
-              </p>
-
-              {product.stock !== null && (
-                <p className={soldOut ? "stock out" : "stock in"}>
-                  {soldOut ? "Out of stock" : `${product.stock} ${product.unit ?? "in stock"} available`}
-                </p>
-              )}
-
-              {product.description && <p className="muted clamp">{product.description}</p>}
-
-              <AddToCartButton variantId={product.variantId} soldOut={soldOut} max={maxOrderableQuantity(product)} />
+                <span className="tile-cta">View product →</span>
+              </Link>
             </li>
           );
         })}

@@ -42,6 +42,8 @@ interface SapoProduct {
   id: number;
   name?: string | null;
   content?: string | null;
+  /** URL slug Sapo generates from the name, e.g. "test-product-1". Sapo's equivalent of a handle. */
+  alias?: string | null;
   /**
    * "active" | "draft" (observed on a live store). Note `published_on` is a separate field and is
    * null even on the product this PoC has been selling all along, so it is not used as a filter.
@@ -79,6 +81,8 @@ function htmlToText(html: string | null | undefined): string | undefined {
 export interface SapoCatalogEntry {
   productId: number;
   variantId: number;
+  /** Sapo's URL slug, absent if the store never generated one. */
+  alias?: string;
   name: string;
   sku: string;
   priceVnd: number;
@@ -101,6 +105,7 @@ function toCatalogEntry(product: SapoProduct, variant: SapoVariant): SapoCatalog
   return {
     productId: product.id,
     variantId: variant.id,
+    alias: product.alias?.trim() || undefined,
     name: product.name?.trim() || `Variant ${variant.id}`,
     sku: (variant.sku ?? "").trim(),
     priceVnd: price,
