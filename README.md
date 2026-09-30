@@ -57,7 +57,33 @@ npm start            # production server on http://localhost:3000
 The IPN is a server-to-server call, so `localhost` will not work. Two options:
 
 - **Local + tunnel (recommended for this MVP):** keep `npm start` running and expose port 3000 with any HTTPS tunnel, e.g. `cloudflared tunnel --url http://localhost:3000`. Put the tunnel URL in `APP_BASE_URL` and restart.
-- **Vercel:** deploy and set the env vars in the project. ⚠️ The pending-order store is in memory; if the IPN lands on a different instance than the checkout it gets `01`. Fine for a quick try, not reliable (see CLAUDE.md).
+- **Vercel:** deploy from GitHub — see [Deploy to Vercel](#deploy-to-vercel). ⚠️ The pending-order store is in memory; if the IPN lands on a different instance than the checkout it gets `01`. Fine for a quick try, not reliable (see CLAUDE.md).
+
+### Deploy to Vercel
+
+The repo builds on Vercel with no extra configuration: every route is `force-dynamic`, so the
+build itself needs no environment variables and cannot fail on a missing secret.
+
+1. https://vercel.com/new → import this GitHub repo. Framework is detected as Next.js; leave the
+   build settings alone.
+2. Settings → Environment Variables, for **Production** and **Preview**, add every required
+   variable from [`.env.example`](./.env.example): `APP_BASE_URL`, `VNPAY_TMN_CODE`,
+   `VNPAY_HASH_SECRET`, `SAPO_STORE_DOMAIN`, `SAPO_API_KEY`, `SAPO_API_SECRET`, plus the optional
+   `VNPAY_PAYMENT_URL` and `SAPO_VARIANT_ID`. None of them are `NEXT_PUBLIC_`, so nothing reaches
+   the browser.
+3. `APP_BASE_URL` must be the deployment's own HTTPS origin with **no trailing slash**
+   (e.g. `https://<project>.vercel.app`). It is what the VNPAY return URL is built from, so a
+   wrong value sends the customer somewhere else after paying. A preview deployment has its own
+   URL — set `APP_BASE_URL` per environment, or keep previews for UI work only.
+4. Redeploy after changing env vars; Vercel does not apply them to an existing deployment.
+5. Point the VNPAY portal IPN URL at `<APP_BASE_URL>/api/vnpay/ipn` (step 4 below). The portal
+   holds one IPN URL at a time, so switching between the tunnel and Vercel means editing it.
+
+**What does not work on Vercel yet:** each serverless invocation may be a different process, and
+`lib/order.ts` keeps pending orders in a `Map`. The IPN can therefore land on an instance that
+never saw the checkout and answer `01`; VNPAY retries, but the retry can miss again. Treat the
+deployment as a public URL and a CI build, and run the money path locally (tunnel, or
+`npm run watch:ipn`) until the store is moved to a KV/database — item 1 in CLAUDE.md's next steps.
 
 ## 4. Configure the IPN URL in VNPAY (manual, once)
 

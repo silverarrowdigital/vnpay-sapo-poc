@@ -138,6 +138,10 @@ npm run dev                  # http://localhost:3000
 
 VNPAY must reach the IPN URL over public HTTPS, so for the real sandbox round trip expose the app (e.g. a tunnel to `next start`, or deploy) and set `APP_BASE_URL` + the portal IPN URL accordingly.
 
+Deploying to Vercel from GitHub is documented in README "Deploy to Vercel": the build needs no env
+vars (every route is `force-dynamic`), but the in-memory store still makes the IPN unreliable there,
+so the deployment is a public URL and a CI build, not the place to test the money path.
+
 Without that — plain `localhost`, no tunnel, no portal IPN URL — a full payment still works end to end
 with the watcher in a second terminal, which replays the genuine callback from the dev log:
 
