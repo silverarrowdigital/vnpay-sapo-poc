@@ -183,6 +183,24 @@ as it would a real IPN. The return route still never mutates state.
   in production:** the trigger is the customer's browser, so a closed tab leaves the order pending.
 - `npm run replay-ipn -- "<query string>"` — same thing from a query string pasted by hand.
 
+**On a deployment the callback is in the platform's runtime logs, not `.next/dev/logs/`.** The
+watcher scripts only read the local dev log, so recovery on Vercel is by hand: open the project's
+Logs, search the txnRef, find `"event":"return.received"` and copy its `query` value, then
+
+```bash
+npm run replay-ipn -- "<query>" https://<deployment>
+```
+
+**The browser's history never has that URL**, so do not go looking there: the return route answers
+`303`, which the browser follows without recording an entry — only `/success` shows up. The log
+line is the single copy.
+
+Verified end to end on the live deployment: a real sandbox payment whose IPN VNPAY never sent was
+recovered this way. Replaying the logged `query` answered `00` and produced Sapo order `#1014`
+(`financial_status: paid`, `gateway: VNPAY`, stock 94 → 92) with the **genuine**
+`vnp_TransactionNo` and `vnp_PayDate` in `note_attributes`; a second replay answered `02`. Note
+the platform's log retention is the real deadline for this, not the order's 24 h Redis TTL.
+
 The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON inside its own
 `message` field, so the escaping means the query must be recovered by parsing JSON twice
 (`scripts/auto-ipn.mjs` `parseLine`); a regex over the raw line silently drops `vnp_Amount`
