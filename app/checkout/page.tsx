@@ -1,47 +1,32 @@
-import Link from "next/link";
 import CheckoutForm from "@/components/CheckoutForm";
-import { getDisplayProduct } from "@/lib/catalog";
+import { getDisplayProducts } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, isSoldOut } from "@/lib/product";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
 
+/**
+ * The catalog is read here, on the server, and handed to the form: the cart in the browser holds
+ * only variant ids and quantities, so names, prices and stock must come from Sapo on every load.
+ * Nothing is checked out from these numbers — /api/checkout prices the order again.
+ */
 export default async function CheckoutPage() {
-  let product;
+  let catalog;
   try {
-    product = await getDisplayProduct();
+    catalog = await getDisplayProducts();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
       <div className="card">
         <h1>Checkout unavailable</h1>
-        <p className="alert err">Could not read the product from Sapo. Please try again later.</p>
-      </div>
-    );
-  }
-
-  if (isSoldOut(product)) {
-    return (
-      <div className="card">
-        <h1>Out of stock</h1>
-        <p className="muted">
-          {product.name} ({product.sku}) is not available right now.
-        </p>
-        <Link className="btn" href="/">
-          Back to product
-        </Link>
+        <p className="alert err">Could not read products from Sapo. Please try again later.</p>
       </div>
     );
   }
 
   return (
-    <div className="card">
+    <>
       <h1>Checkout</h1>
-      <p className="muted">
-        {product.name} ({product.sku}) · {formatVnd(product.priceVnd)} each
-        {product.stock !== null && ` · ${product.stock} available`}
-      </p>
-      <CheckoutForm product={product} />
-    </div>
+      <CheckoutForm catalog={catalog} />
+    </>
   );
 }

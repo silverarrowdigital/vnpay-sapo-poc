@@ -15,13 +15,35 @@ export const PRODUCT = {
   priceVnd: 100_000,
 } as const;
 
-/** Hard ceiling on quantity, independent of stock. */
+/** Hard ceiling on quantity per line, independent of stock. */
 export const MAX_QUANTITY = 10;
+
+/**
+ * Hard ceiling on distinct lines in a cart. A crafted request could otherwise ask us to price an
+ * unbounded number of lines, and the Sapo order would be just as unbounded.
+ */
+export const MAX_CART_LINES = 20;
+
+/**
+ * A cart line exactly as the browser keeps and sends it: what, and how many. Never a price — the
+ * server resolves the variant against Sapo and recomputes every amount (see startCheckout).
+ */
+export interface CartLine {
+  variantId: number;
+  quantity: number;
+}
 
 /** What the UI renders and what checkout prices against. */
 export interface DisplayProduct {
   name: string;
   sku: string;
+  /**
+   * Sapo variant id, absent in fallback mode. Price and stock live on the variant, so this — not a
+   * product id — is what identifies a line the customer is buying.
+   */
+  variantId?: number;
+  /** Sapo's URL slug. Used for the product page's address when present. */
+  alias?: string;
   priceVnd: number;
   /** Sapo compare_at_price: the struck-through "was" price, when higher than priceVnd. */
   compareAtPriceVnd?: number;
@@ -34,6 +56,20 @@ export interface DisplayProduct {
   imageUrl?: string;
   /** Where the data came from, so the UI can say so. */
   source: "sapo" | "fallback";
+}
+
+/**
+ * A product from the Sapo catalog, always backed by a real variant. The storefront only ever lists
+ * these, so nothing downstream has to handle a product it could not put in a cart.
+ */
+export type CatalogProduct = DisplayProduct & { variantId: number };
+
+/**
+ * Address of a product's page. The readable slug is preferred, with the variant id as the fallback
+ * so a product Sapo never gave an alias still has a working link. The route resolves both.
+ */
+export function productHref(p: CatalogProduct): string {
+  return `/products/${encodeURIComponent(p.alias ?? String(p.variantId))}`;
 }
 
 /** true when the product cannot be bought right now. */

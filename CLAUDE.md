@@ -30,8 +30,11 @@ Browser                         Next.js (App Router, Node runtime)              
 
 | Path | Role |
 |---|---|
-| `app/page.tsx` | Product page |
-| `app/checkout/page.tsx`, `components/CheckoutForm.tsx` | Checkout form (client) |
+| `app/page.tsx` | Catalog grid; each tile links to the product page |
+| `app/products/[handle]/page.tsx` | Product page: details, quantity, add to cart |
+| `app/checkout/page.tsx`, `components/CheckoutForm.tsx` | Cart editor + delivery form (client) |
+| `components/useCart.ts` | Cart state in `localStorage`, read through `useSyncExternalStore` |
+| `components/AddToCartForm.tsx`, `components/CartBadge.tsx`, `components/ClearCartOnSuccess.tsx` | Cart controls |
 | `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state |
 | `app/api/checkout/route.ts` | Validate input, start checkout, return VNPAY URL |
 | `app/api/vnpay/return/route.ts` | Browser return: checksum check + redirect. **Never mutates state.** |
@@ -72,6 +75,7 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
+| `ORDER_STORE_NAMESPACE` | no | Overrides the Redis key namespace (see below). Empty string selects production's |
 
 Missing variables raise `MissingEnvError`; `/api/checkout` returns 500 with a generic message and logs the names. Checkout also fails fast if Sapo is not configured, so we never take a payment we cannot record.
 
@@ -129,7 +133,7 @@ replay, and a repeated IPN answering `02` while stock stayed put.
 - List: `GET /admin/orders.json?status=any&created_on_min=...&fields=...` — https://support.sapo.vn/phuong-thuc-get-cua-order-phan-1
 - Attributes (`financial_status`, `note_attributes`, `tags`, `source_name`) — https://support.sapo.vn/cac-thuoc-tinh-cua-order-api
 
-Payload sent (see `buildOrderPayload`): email, phone, `line_items` (custom `{title, sku, price, quantity}` or `{variant_id, quantity, price}`), `customer {first_name, last_name, email, phone}`, billing + shipping address (`address1`, `country: Vietnam`), `financial_status: "paid"`, `transactions [{kind: sale, status: success, amount, gateway: VNPAY}]`, `note`, `note_attributes` (vnp_TxnRef, vnp_TransactionNo, vnp_BankCode, vnp_PayDate, sku, amount_vnd), `tags` (`headless-poc, vnpay, vnpay-<txnRef>`), receipts off.
+Payload sent (see `buildOrderPayload`): email, phone, `line_items` — one per cart line, each either `{variant_id, quantity, price}` or, with no variant, custom `{title, sku, price, quantity}`, `customer {first_name, last_name, email, phone}`, billing + shipping address (`address1`, `country: Vietnam`), `financial_status: "paid"`, `transactions [{kind: sale, status: success, amount, gateway: VNPAY}]`, `note`, `note_attributes` (vnp_TxnRef, vnp_TransactionNo, vnp_BankCode, vnp_PayDate, sku, amount_vnd), `tags` (`headless-poc, vnpay, vnpay-<txnRef>`), receipts off.
 
 **Two Sapo deviations from the Shopify-style API, both verified against a live store:**
 
@@ -155,6 +159,12 @@ Sapo's Order API overview notes payment info/transactions may not be stored for 
 
   Verified on the live Vercel deployment with Redis attached: one checkout then 6 consecutive reads of `/success` all found the order (before Redis, 5 of 5 missed); a wrong amount answered `04`, proving the cross-instance read; three concurrent IPNs for one txnRef answered exactly one `00` and two `99`, and a fourth after completion answered `02`. Run with `vnp_ResponseCode=24` so none of it creates a Sapo order.
 - **Sapo failure after verified payment** → status `sapo_error`, IPN returns `99` so VNPAY retries the IPN, which retries Sapo.
+- **One Redis database is attached to every Vercel environment at once**, so keys carry a namespace (`lib/store.ts` `keyNamespace()`): production keeps the unprefixed keys it has always used — shipping the namespacing could not orphan an order mid-payment — while a preview gets `preview-<branch>` (keyed by `VERCEL_GIT_COMMIT_REF`, so redeploying a branch keeps its orders) and a local server gets `local`. Without this, a preview of a branch that changed `PendingOrder` would write records straight into the set production reads, and production, on older code, would mis-read them for a real customer. `store.redis` logs the namespace so a mix-up is visible without guessing. Sharing a namespace on purpose (`ORDER_STORE_NAMESPACE=`) is what lets a local server finish an order whose IPN VNPAY delivered to the production deployment, since the portal holds only one IPN URL; it is only safe while both sides agree on the record shape.
+- **The cart lives in the browser and carries no prices.** `localStorage` holds only `{variantId, quantity}`; `/api/checkout` resolves each variant against the live Sapo catalog and recomputes every amount, so a tampered cart can change *what* is ordered but never *what it costs*. A line is keyed by `variantId` because that is where Sapo keeps price and stock. Duplicate variants in one request are folded into a single line rather than refused, and the per-line and per-cart ceilings (`MAX_QUANTITY`, `MAX_CART_LINES`) bound how much work a request can ask for.
+- **The cart is cleared on the result page, not at checkout**, so a cancelled payment leaves the basket intact.
+- **A product page's handle is Sapo's `alias`, and the route also accepts a `variantId`** (`getProductByHandle`). Links are built from the alias because they are readable and Sapo generates them already; the numeric form is the fallback for a product Sapo gave no alias, and stays valid when renaming a product changes its alias. The lookup filters the catalog list rather than calling a per-product endpoint, which keeps this code on the one Sapo products endpoint that has been verified against a live store.
+- **A product's description is stripped to text, never rendered as HTML.** Sapo returns `content` as HTML, so rendering it would let whatever is typed into a product's description execute on the storefront.
+- **A stored order without `lines` is read as one line** from the old top-level `sku`/`quantity` (`normaliseLines`). Production shares one key namespace across deploys of `main`, so the first deploy that understands carts will read records the previous deploy wrote for orders that were mid-payment; without the fallback those would be dropped exactly when their IPN arrived. A record that is neither shape is reported absent, which answers `01` and lets VNPAY retry rather than inventing an order.
 - **Double idempotency**: the stored status (Redis or Map), plus a Sapo lookup before every create. The lookup filters server-side with `?tag=vnpay-<txnRef>` and re-checks the tag (or `note_attributes.vnp_TxnRef`) on the returned rows, so a store that ignored `tag` still matches correctly from the recent-orders list. Survives restarts/other instances as long as the pending order is known. It sends no `status` filter, so it sees open orders only — enough for a VNPAY IPN retry (within ~50 min), but an order closed in Sapo before the retry would not be found (not verified against a live store: closing an order needs a write we did not make).
 - **Name split**: last word → `first_name`, rest → `last_name` (Vietnamese order).
 - Result page reads server state and auto-refreshes every 3 s while waiting for the IPN.
@@ -236,13 +246,13 @@ The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON ins
 - **The in-memory fallback is still in-memory**: with no Redis env vars, `lib/store.ts` uses a Map, so pending orders are lost on restart and never shared between instances. That is fine for `next dev`/`next start` on one machine and wrong on Vercel, where the IPN may land on an instance that never saw the checkout and answer `01`. Configure Redis for any serverless deployment; the result page names which backend is in use when it cannot find an order.
 - If an order is lost from memory, a paid VNPAY transaction cannot be turned into a Sapo order automatically; reconcile manually via VNPAY merchant portal.
 - No querydr/refund APIs, no inventory reservation, no email receipts, no rate limiting, no CSRF token on `/api/checkout` (JSON-only POST).
-- Single product, max quantity 10.
+- One entry per Sapo product (the first variant by `position`): a product with real options would need a variant picker. Max 10 per line, max 20 lines.
 
 ## Next steps (not in MVP)
 
 1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
 2. VNPAY `querydr` reconciliation job for orders stuck in `pending`/`sapo_error`.
-3. Read real products from Sapo (`/admin/products.json`) instead of the hardcoded one.
+3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker, and product images (the live store has none, so tiles show a placeholder).
 
 <!-- BEGIN:nextjs-agent-rules -->
 

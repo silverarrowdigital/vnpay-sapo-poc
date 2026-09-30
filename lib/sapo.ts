@@ -35,11 +35,20 @@ interface SapoVariant {
   inventory_quantity?: number | null;
   unit?: string | null;
   image_id?: number | null;
+  /** 1-based order within the product; used to pick a single representative variant. */
+  position?: number | null;
 }
 interface SapoProduct {
   id: number;
   name?: string | null;
   content?: string | null;
+  /** URL slug Sapo generates from the name, e.g. "test-product-1". Sapo's equivalent of a handle. */
+  alias?: string | null;
+  /**
+   * "active" | "draft" (observed on a live store). Note `published_on` is a separate field and is
+   * null even on the product this PoC has been selling all along, so it is not used as a filter.
+   */
+  status?: string | null;
   variants?: SapoVariant[] | null;
   images?: { id: number; src?: string | null }[] | null;
   image?: { src?: string | null } | null;
@@ -72,6 +81,8 @@ function htmlToText(html: string | null | undefined): string | undefined {
 export interface SapoCatalogEntry {
   productId: number;
   variantId: number;
+  /** Sapo's URL slug, absent if the store never generated one. */
+  alias?: string;
   name: string;
   sku: string;
   priceVnd: number;
@@ -80,6 +91,37 @@ export interface SapoCatalogEntry {
   unit?: string;
   description?: string;
   imageUrl?: string;
+}
+
+/**
+ * Map one Sapo product + variant to a catalog entry. Price, stock, sku and unit all live on the
+ * **variant**, not the product — that is why a cart line is keyed by variantId.
+ */
+function toCatalogEntry(product: SapoProduct, variant: SapoVariant): SapoCatalogEntry {
+  const price = toVnd(variant.price);
+  const compare = toVnd(variant.compare_at_price);
+  const image =
+    product.images?.find((i) => i.id === variant.image_id)?.src ?? product.image?.src ?? product.images?.[0]?.src;
+  return {
+    productId: product.id,
+    variantId: variant.id,
+    alias: product.alias?.trim() || undefined,
+    name: product.name?.trim() || `Variant ${variant.id}`,
+    sku: (variant.sku ?? "").trim(),
+    priceVnd: price,
+    compareAtPriceVnd: compare > price ? compare : undefined,
+    stock: typeof variant.inventory_quantity === "number" ? variant.inventory_quantity : 0,
+    unit: variant.unit?.trim() || undefined,
+    description: htmlToText(product.content),
+    imageUrl: image ?? undefined,
+  };
+}
+
+/** Sapo orders variants by `position`; a missing position sorts last rather than first. */
+function firstVariant(product: SapoProduct): SapoVariant | undefined {
+  const variants = (product.variants ?? []).filter((v) => typeof v.id === "number");
+  if (variants.length === 0) return undefined;
+  return [...variants].sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))[0];
 }
 
 /**
@@ -92,25 +134,30 @@ export async function fetchCatalogEntry(cfg: SapoConfig, variantId: number): Pro
   for (const product of data.products ?? []) {
     for (const variant of product.variants ?? []) {
       if (variant.id !== variantId) continue;
-      const price = toVnd(variant.price);
-      const compare = toVnd(variant.compare_at_price);
-      const image =
-        product.images?.find((i) => i.id === variant.image_id)?.src ?? product.image?.src ?? product.images?.[0]?.src;
-      return {
-        productId: product.id,
-        variantId: variant.id,
-        name: product.name?.trim() || `Variant ${variant.id}`,
-        sku: (variant.sku ?? "").trim(),
-        priceVnd: price,
-        compareAtPriceVnd: compare > price ? compare : undefined,
-        stock: typeof variant.inventory_quantity === "number" ? variant.inventory_quantity : 0,
-        unit: variant.unit?.trim() || undefined,
-        description: htmlToText(product.content),
-        imageUrl: image ?? undefined,
-      };
+      return toCatalogEntry(product, variant);
     }
   }
   throw new SapoApiError(`No Sapo variant with id ${variantId} (check SAPO_VARIANT_ID)`);
+}
+
+/**
+ * Every sellable product, one entry each: the first variant by position. Products with no variant
+ * are skipped, and only `status === "active"` is listed, so a draft never reaches the storefront.
+ *
+ * One entry per product is a deliberate PoC limit — a product with real options would need a
+ * variant picker. Because entries already carry variantId, adding that later does not change the
+ * shape of a cart line.
+ */
+export async function fetchCatalogEntries(cfg: SapoConfig): Promise<SapoCatalogEntry[]> {
+  const data = (await sapoFetch(cfg, "/admin/products.json?limit=250")) as { products?: SapoProduct[] };
+  const entries: SapoCatalogEntry[] = [];
+  for (const product of data.products ?? []) {
+    if ((product.status ?? "active").trim().toLowerCase() !== "active") continue;
+    const variant = firstVariant(product);
+    if (variant === undefined) continue;
+    entries.push(toCatalogEntry(product, variant));
+  }
+  return entries;
 }
 
 export interface SapoOrderInput {
@@ -119,11 +166,21 @@ export interface SapoOrderInput {
   vnpBankCode?: string;
   vnpPayDate?: string;
   customer: { name: string; phone: string; email: string; address: string };
+  lines: SapoOrderLine[];
+  totalVnd: number;
+}
+
+/**
+ * One line to create. Structurally the same as a stored order line; declared here so this module
+ * stays independent of lib/store.ts, which imports it.
+ */
+export interface SapoOrderLine {
+  /** Sapo variant id. Without one the line is created as a custom item and moves no stock. */
+  variantId?: number;
   sku: string;
   productName: string;
   unitPriceVnd: number;
   quantity: number;
-  totalVnd: number;
 }
 
 export interface SapoOrderRef {
@@ -190,15 +247,21 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
     country: "Vietnam",
   };
 
-  const lineItem = cfg.variantId
-    ? { variant_id: cfg.variantId, quantity: input.quantity, price: input.unitPriceVnd }
-    : { title: input.productName, sku: input.sku, price: input.unitPriceVnd, quantity: input.quantity };
+  // A line's own variantId wins; cfg.variantId is the fallback that keeps a legacy single-line
+  // record (written before carts existed) linked to the variant it was bought from.
+  const resolved = input.lines.map((line) => ({ line, variantId: line.variantId ?? cfg.variantId }));
+  const lineItems = resolved.map(({ line, variantId }) =>
+    variantId !== undefined
+      ? { variant_id: variantId, quantity: line.quantity, price: line.unitPriceVnd }
+      : { title: line.productName, sku: line.sku, price: line.unitPriceVnd, quantity: line.quantity },
+  );
+  const anyVariantLinked = resolved.some(({ variantId }) => variantId !== undefined);
 
   return {
     order: {
       email: input.customer.email,
       phone: input.customer.phone,
-      line_items: [lineItem],
+      line_items: lineItems,
       customer: { first_name, last_name, email: input.customer.email, phone: input.customer.phone },
       billing_address: address,
       shipping_address: address,
@@ -210,7 +273,7 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
         { name: "vnp_TransactionNo", value: input.vnpTransactionNo },
         { name: "vnp_BankCode", value: input.vnpBankCode ?? "" },
         { name: "vnp_PayDate", value: input.vnpPayDate ?? "" },
-        { name: "sku", value: input.sku },
+        { name: "sku", value: input.lines.map((l) => l.sku).join(", ") },
         { name: "amount_vnd", value: String(input.totalVnd) },
       ],
       tags: `headless-poc, vnpay, ${txnTag(input.txnRef)}`,
@@ -222,7 +285,7 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
       // here after the payment is already verified, so a refusal for being out of stock would
       // leave money taken and no order (IPN 99 → VNPAY retries → still fails). This always
       // succeeds and may drive stock negative; that is an ops problem, not a payment one.
-      ...(cfg.variantId ? { inventory_behaviour: "decrement_ignoring_policy" } : {}),
+      ...(anyVariantLinked ? { inventory_behaviour: "decrement_ignoring_policy" } : {}),
       // No source_name: Sapo reserves values like "web"/"pos" for its own channels and rejects
       // a private app that sets one (HTTP 422 "cannot be set to a protected value by an
       // untrusted API client"). The order is identified by its tags and note_attributes instead.

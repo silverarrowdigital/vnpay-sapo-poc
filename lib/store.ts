@@ -31,14 +31,24 @@ export type OrderStatus =
   | "cancelled" // customer cancelled at VNPAY
   | "failed"; // payment failed
 
-export interface PendingOrder {
-  txnRef: string;
-  createdAt: string;
-  customer: { name: string; phone: string; email: string; address: string };
+/**
+ * One priced line of an order. Prices are what the server resolved from Sapo at checkout time, so
+ * the IPN records what the customer actually saw even if the catalog changed in between.
+ */
+export interface PendingOrderLine {
+  /** Sapo variant id. Absent only for a legacy record written before the cart existed. */
+  variantId?: number;
   sku: string;
   productName: string;
   unitPriceVnd: number;
   quantity: number;
+}
+
+export interface PendingOrder {
+  txnRef: string;
+  createdAt: string;
+  customer: { name: string; phone: string; email: string; address: string };
+  lines: PendingOrderLine[];
   amountVnd: number;
   status: OrderStatus;
   vnpResponseCode?: string;
@@ -58,6 +68,38 @@ const CLAIM_TTL_SECONDS = 120;
 
 const ORDER_KEY = "vnpay-sapo:order:";
 const CLAIM_KEY = "vnpay-sapo:claim:";
+
+/**
+ * Key namespace, inserted after the fixed prefix.
+ *
+ * One Redis database is attached to every Vercel environment at once, so a preview deployment of a
+ * branch that changed `PendingOrder` would otherwise write records straight into the set that
+ * production reads — and production, running older code, would mis-read them for a real customer.
+ * Namespacing by environment keeps them apart.
+ *
+ * **Production deliberately keeps the unprefixed keys** it has always used, so shipping this
+ * change cannot orphan an order that is mid-payment. Everything else gets its own space: a preview
+ * is keyed by branch (`VERCEL_GIT_COMMIT_REF`) rather than by deployment, so redeploying a branch
+ * keeps its orders, and a local server is `local`.
+ *
+ * `ORDER_STORE_NAMESPACE` overrides all of it. Setting it to an empty string selects production's
+ * namespace, which is how a local server can finish an order whose IPN VNPAY delivers to the
+ * production deployment (the portal holds one IPN URL). That is only safe while the local code
+ * still agrees with production about the shape of a `PendingOrder`.
+ */
+function keyNamespace(): string {
+  const override = process.env.ORDER_STORE_NAMESPACE;
+  if (override !== undefined) {
+    const trimmed = override.trim();
+    return trimmed === "" ? "" : `${trimmed}:`;
+  }
+  const env = process.env.VERCEL_ENV?.trim();
+  if (env === undefined || env === "") return "local:";
+  if (env === "production") return "";
+  // Branch names allow characters Redis keys are better off without.
+  const ref = process.env.VERCEL_GIT_COMMIT_REF?.trim().replace(/[^A-Za-z0-9._-]+/g, "-");
+  return `${env}-${ref || "unknown"}:`;
+}
 
 export interface OrderStore {
   /** Which backend is in use, for logging and for the result page's wording. */
@@ -96,7 +138,58 @@ function toPendingOrder(raw: unknown): PendingOrder | undefined {
     log.warn("store.malformed_order", { txnRef: typeof o.txnRef === "string" ? o.txnRef : undefined });
     return undefined;
   }
-  return value as PendingOrder;
+  const lines = normaliseLines(value);
+  if (lines === undefined) {
+    log.warn("store.order_without_lines", { txnRef: o.txnRef });
+    return undefined;
+  }
+  return { ...(value as PendingOrder), lines };
+}
+
+/** The single-product record this code wrote before carts existed. */
+interface LegacyOrderFields {
+  sku?: unknown;
+  productName?: unknown;
+  unitPriceVnd?: unknown;
+  quantity?: unknown;
+}
+
+/**
+ * Reads the lines of a stored order, accepting the pre-cart shape.
+ *
+ * Production shares one key namespace across deploys of `main`, so the first deploy that
+ * understands carts will read records the previous deploy wrote for orders that were mid-payment.
+ * Those carry `sku`/`quantity` at the top level instead of `lines`; folding them into a single line
+ * here is what keeps such an order from being dropped at the moment its IPN arrives.
+ */
+function normaliseLines(value: unknown): PendingOrderLine[] | undefined {
+  const o = value as { lines?: unknown } & LegacyOrderFields;
+  if (Array.isArray(o.lines)) {
+    const lines = o.lines.filter(isPendingOrderLine);
+    return lines.length === o.lines.length && lines.length > 0 ? lines : undefined;
+  }
+  if (typeof o.sku === "string" && typeof o.unitPriceVnd === "number" && typeof o.quantity === "number") {
+    return [
+      {
+        sku: o.sku,
+        productName: typeof o.productName === "string" ? o.productName : o.sku,
+        unitPriceVnd: o.unitPriceVnd,
+        quantity: o.quantity,
+      },
+    ];
+  }
+  return undefined;
+}
+
+function isPendingOrderLine(line: unknown): line is PendingOrderLine {
+  if (typeof line !== "object" || line === null) return false;
+  const l = line as Partial<PendingOrderLine>;
+  return (
+    typeof l.sku === "string" &&
+    typeof l.productName === "string" &&
+    typeof l.unitPriceVnd === "number" &&
+    typeof l.quantity === "number"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -156,24 +249,36 @@ class MemoryOrderStore implements OrderStore {
 class RedisOrderStore implements OrderStore {
   readonly kind = "redis" as const;
 
-  constructor(private readonly redis: Redis) {}
+  constructor(
+    private readonly redis: Redis,
+    /** Resolved once when the store is built; see keyNamespace(). */
+    private readonly namespace: string,
+  ) {}
+
+  private orderKey(txnRef: string): string {
+    return ORDER_KEY + this.namespace + txnRef;
+  }
+
+  private claimKey(txnRef: string): string {
+    return CLAIM_KEY + this.namespace + txnRef;
+  }
 
   async get(txnRef: string): Promise<PendingOrder | undefined> {
-    return toPendingOrder(await this.redis.get<unknown>(ORDER_KEY + txnRef));
+    return toPendingOrder(await this.redis.get<unknown>(this.orderKey(txnRef)));
   }
 
   async put(order: PendingOrder): Promise<void> {
     // Refreshes the TTL on every write, so an order stays readable for 24 h after its last change.
-    await this.redis.set(ORDER_KEY + order.txnRef, order, { ex: ORDER_TTL_SECONDS });
+    await this.redis.set(this.orderKey(order.txnRef), order, { ex: ORDER_TTL_SECONDS });
   }
 
   async has(txnRef: string): Promise<boolean> {
-    return (await this.redis.get<unknown>(ORDER_KEY + txnRef)) !== null;
+    return (await this.redis.get<unknown>(this.orderKey(txnRef))) !== null;
   }
 
   async claim(txnRef: string): Promise<boolean> {
     // SET NX EX is the atomic part: exactly one concurrent caller gets "OK", the rest get null.
-    const result = await this.redis.set(CLAIM_KEY + txnRef, new Date().toISOString(), {
+    const result = await this.redis.set(this.claimKey(txnRef), new Date().toISOString(), {
       nx: true,
       ex: CLAIM_TTL_SECONDS,
     });
@@ -181,7 +286,7 @@ class RedisOrderStore implements OrderStore {
   }
 
   async release(txnRef: string): Promise<void> {
-    await this.redis.del(CLAIM_KEY + txnRef);
+    await this.redis.del(this.claimKey(txnRef));
   }
 }
 
@@ -205,8 +310,11 @@ export function getOrderStore(): OrderStore {
     return cached;
   }
   try {
-    cached = new RedisOrderStore(new Redis({ url: redis.url, token: redis.token }));
-    log.info("store.redis");
+    const namespace = keyNamespace();
+    cached = new RedisOrderStore(new Redis({ url: redis.url, token: redis.token }), namespace);
+    // The namespace is not a secret and knowing it is what makes a cross-environment mix-up
+    // diagnosable from the logs alone.
+    log.info("store.redis", { namespace: namespace === "" ? "(production)" : namespace.replace(/:$/, "") });
   } catch (err) {
     // A malformed URL is the only realistic failure here; the client itself makes no request.
     log.error("store.redis_init_failed", { error: errorMessage(err) });
@@ -214,6 +322,12 @@ export function getOrderStore(): OrderStore {
   }
   return cached;
 }
+
+/** Test helper: reading a stored record, so the legacy-shape fallback can be asserted. */
+export const _toPendingOrder = toPendingOrder;
+
+/** Test helper: the resolved key namespace, so the environment rules can be asserted. */
+export const _keyNamespace = keyNamespace;
 
 /** Test helper: drop the in-memory state and force the backend to be chosen again. */
 export function _resetStore(): void {

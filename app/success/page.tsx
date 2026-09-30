@@ -1,5 +1,6 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/AutoRefresh";
+import ClearCartOnSuccess from "@/components/ClearCartOnSuccess";
 import { getOrder, orderStoreKind, type PendingOrder } from "@/lib/order";
 import { formatVnd } from "@/lib/product";
 import { describeResponseCode } from "@/lib/vnpay";
@@ -77,6 +78,7 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
   return (
     <div className="card">
       {((waiting && order) || storeUnavailable) && <AutoRefresh />}
+      {order?.status === "completed" && <ClearCartOnSuccess />}
       <h1>{headline}</h1>
       <div className={`alert ${tone}`}>{detail}</div>
       <dl className="kv">
@@ -88,10 +90,16 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
         )}
         {order && (
           <>
+            <dt>Items</dt>
+            <dd>
+              {order.lines.map((line) => (
+                <div key={line.sku + String(line.variantId)}>
+                  {line.productName} × {line.quantity} — {formatVnd(line.unitPriceVnd * line.quantity)}
+                </div>
+              ))}
+            </dd>
             <dt>Amount</dt>
             <dd>{formatVnd(order.amountVnd)}</dd>
-            <dt>Quantity</dt>
-            <dd>{order.quantity}</dd>
             <dt>Status</dt>
             <dd>{order.status}</dd>
           </>

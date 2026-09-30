@@ -111,3 +111,116 @@ dl.kv dd { margin: 0; word-break: break-all; }
 
 /* Sold-out button: not-allowed, unlike the submitting button which keeps cursor:progress. */
 .btn.sold-out[disabled] { cursor: not-allowed; }
+
+/* ---- Catalog grid ---------------------------------------------------------- */
+
+.catalog-head { margin-top: 16px; }
+.catalog-head h1 { margin-bottom: 4px; }
+
+.grid {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.card.product { margin-top: 0; padding: 16px; display: flex; flex-direction: column; }
+.card.product h2 { font-size: 17px; margin: 2px 0 0; }
+.card.product .price { font-size: 20px; margin: 8px 0; }
+.card.product .btn { margin-top: auto; }
+
+/* Sapo products can have no image at all, so the frame is always drawn. */
+.thumb {
+  aspect-ratio: 4 / 3; margin-bottom: 12px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb-empty { font-size: 12px; color: var(--muted); }
+
+/* Keeps a long Sapo description from stretching one tile past the others. */
+.clamp {
+  font-size: 13px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+
+/* ---- Cart ----------------------------------------------------------------- */
+
+.cart-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  text-decoration: none; color: var(--text); font-weight: 600;
+}
+.cart-count {
+  min-width: 20px; padding: 0 6px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-text);
+  font-size: 12px; line-height: 20px; text-align: center;
+}
+
+.cart-lines { list-style: none; padding: 0; margin: 0 0 16px; }
+.cart-line {
+  display: grid; align-items: center; gap: 8px 12px;
+  grid-template-columns: 1fr auto auto auto;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.cart-line:last-child { border-bottom: 0; }
+.cart-name { font-weight: 600; }
+.cart-sum { font-variant-numeric: tabular-nums; }
+.cart-line.gone .cart-name { color: var(--err); font-weight: 400; }
+
+.cart-qty { display: inline-flex; align-items: center; gap: 4px; }
+.cart-qty input {
+  width: 52px; text-align: center; padding: 6px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--text);
+}
+.step {
+  width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+  font-size: 16px; line-height: 1;
+}
+.step[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+.link-btn {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--muted); font-size: 13px; text-decoration: underline;
+}
+.link-btn:hover { color: var(--err); }
+
+/* At phone width the four columns do not fit; name on its own row, controls below. */
+@media (max-width: 520px) {
+  .cart-line { grid-template-columns: 1fr auto; }
+  .cart-name { grid-column: 1 / -1; }
+}
+
+/* ---- Catalog tile as a link ------------------------------------------------ */
+
+.grid > li { display: flex; }
+.card.product.tile {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  text-decoration: none; color: var(--text);
+}
+.card.product.tile:hover { border-color: var(--accent); }
+.tile-name { font-size: 17px; font-weight: 700; margin: 2px 0; }
+.tile .price { margin: 6px 0; }
+.tile-cta { margin-top: auto; padding-top: 10px; font-size: 13px; color: var(--accent); }
+
+/* ---- Product detail ------------------------------------------------------- */
+
+.crumb { margin: 16px 0 0; font-size: 14px; }
+.crumb a { color: var(--accent); text-decoration: none; }
+
+.detail { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.detail-media {
+  aspect-ratio: 1 / 1; border-radius: 12px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.detail-media img { width: 100%; height: 100%; object-fit: cover; }
+.detail-body h1 { font-size: 24px; margin: 4px 0 0; }
+
+.add-form { display: grid; gap: 12px; margin-top: 20px; }
+.add-form .qty { display: grid; gap: 4px; }
+.add-form .qty label { font-weight: 600; font-size: 14px; }
+
+/* One column at phone width: the image above the details rather than beside them. */
+@media (max-width: 600px) {
+  .detail { grid-template-columns: 1fr; }
+}
