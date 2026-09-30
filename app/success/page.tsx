@@ -1,6 +1,6 @@
 import Link from "next/link";
 import AutoRefresh from "@/components/AutoRefresh";
-import { getOrder } from "@/lib/order";
+import { getOrder, orderStoreKind, type PendingOrder } from "@/lib/order";
 import { formatVnd } from "@/lib/product";
 import { describeResponseCode } from "@/lib/vnpay";
 
@@ -17,7 +17,17 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
   const code = one(sp.code);
 
   // Server-side order state is authoritative (set only by the IPN).
-  const order = txnRef ? getOrder(txnRef) : undefined;
+  let order: PendingOrder | undefined;
+  let storeUnavailable = false;
+  if (txnRef) {
+    try {
+      order = await getOrder(txnRef);
+    } catch {
+      // A store outage must not be reported as "no such order": the payment may well have gone
+      // through, and the IPN will retry. Details stay in the server log.
+      storeUnavailable = true;
+    }
+  }
   const waiting = outcome === "success" && (!order || order.status === "pending" || order.status === "processing");
 
   let headline: string;
@@ -28,6 +38,11 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
     headline = "Could not verify the payment response";
     tone = "err";
     detail = "The data returned from VNPAY failed the checksum check. No order was created.";
+  } else if (storeUnavailable) {
+    headline = "Cannot read the order state right now";
+    tone = "warn";
+    detail =
+      "The order store could not be reached, so this page cannot say what happened yet. If the payment went through, VNPAY's confirmation will still be processed. This page keeps retrying.";
   } else if (order?.status === "completed") {
     headline = "Payment confirmed — order created";
     tone = "ok";
@@ -54,12 +69,14 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
     headline = "Order not found";
     tone = "err";
     detail =
-      "This server has no record of the transaction (the in-memory store may have been reset or the IPN reached another instance). Check Sapo and the server logs.";
+      orderStoreKind() === "memory"
+        ? "This server has no record of the transaction. Orders are kept in memory, so a restart loses them and a second instance never sees them. Check Sapo and the server logs."
+        : "The shared store has no record of this transaction, or it has expired. Check Sapo and the server logs.";
   }
 
   return (
     <div className="card">
-      {waiting && order && <AutoRefresh />}
+      {((waiting && order) || storeUnavailable) && <AutoRefresh />}
       <h1>{headline}</h1>
       <div className={`alert ${tone}`}>{detail}</div>
       <dl className="kv">

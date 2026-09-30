@@ -96,3 +96,25 @@ export function getSapoConfig(): SapoConfig {
   }
   return { storeDomain, apiKey: env.SAPO_API_KEY, apiSecret: env.SAPO_API_SECRET, variantId };
 }
+
+export interface RedisConfig {
+  url: string;
+  token: string;
+}
+
+/**
+ * Optional shared store for pending orders. Without it the app falls back to an in-memory Map,
+ * which only works when checkout and the IPN reach the same process (see lib/store.ts).
+ *
+ * Two naming conventions exist and both are accepted: Vercel's Marketplace Redis integration
+ * injects `KV_REST_API_URL` / `KV_REST_API_TOKEN`, while a database created directly at Upstash
+ * gives `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. The UPSTASH_* pair wins when both
+ * are present, matching Redis.fromEnv() in @upstash/redis.
+ */
+export function getRedisConfig(): RedisConfig | undefined {
+  const url = read("UPSTASH_REDIS_REST_URL") ?? read("KV_REST_API_URL");
+  const token = read("UPSTASH_REDIS_REST_TOKEN") ?? read("KV_REST_API_TOKEN");
+  if (url === undefined || token === undefined) return undefined;
+  if (isPlaceholder(url) || isPlaceholder(token)) return undefined;
+  return { url, token };
+}

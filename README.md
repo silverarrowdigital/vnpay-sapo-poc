@@ -57,7 +57,7 @@ npm start            # production server on http://localhost:3000
 The IPN is a server-to-server call, so `localhost` will not work. Two options:
 
 - **Local + tunnel (recommended for this MVP):** keep `npm start` running and expose port 3000 with any HTTPS tunnel, e.g. `cloudflared tunnel --url http://localhost:3000`. Put the tunnel URL in `APP_BASE_URL` and restart.
-- **Vercel:** deploy from GitHub — see [Deploy to Vercel](#deploy-to-vercel). ⚠️ The pending-order store is in memory; if the IPN lands on a different instance than the checkout it gets `01`. Fine for a quick try, not reliable (see CLAUDE.md).
+- **Vercel:** deploy from GitHub — see [Deploy to Vercel](#deploy-to-vercel). Needs a Redis store, otherwise each instance keeps its own pending orders and a paid order is lost.
 
 ### Deploy to Vercel
 
@@ -70,20 +70,29 @@ build itself needs no environment variables and cannot fail on a missing secret.
    variable from [`.env.example`](./.env.example): `APP_BASE_URL`, `VNPAY_TMN_CODE`,
    `VNPAY_HASH_SECRET`, `SAPO_STORE_DOMAIN`, `SAPO_API_KEY`, `SAPO_API_SECRET`, plus the optional
    `VNPAY_PAYMENT_URL` and `SAPO_VARIANT_ID`. None of them are `NEXT_PUBLIC_`, so nothing reaches
-   the browser.
-3. `APP_BASE_URL` must be the deployment's own HTTPS origin with **no trailing slash**
+   the browser. The form accepts a pasted `.env` file, so you can paste `.env.local` wholesale.
+3. **Add Redis — not optional here.** Project → **Storage** → **Create Database** → **Upstash for
+   Redis** → connect it to this project. Vercel then injects `KV_REST_API_URL` and
+   `KV_REST_API_TOKEN` for you; `lib/store.ts` picks them up with no code change. Skip this and
+   every lambda keeps its own `Map`: the customer pays, the IPN lands somewhere that never saw the
+   checkout, answers `01`, and no Sapo order is ever created.
+4. `APP_BASE_URL` must be the deployment's own HTTPS origin with **no trailing slash**
    (e.g. `https://<project>.vercel.app`). It is what the VNPAY return URL is built from, so a
    wrong value sends the customer somewhere else after paying. A preview deployment has its own
    URL — set `APP_BASE_URL` per environment, or keep previews for UI work only.
-4. Redeploy after changing env vars; Vercel does not apply them to an existing deployment.
-5. Point the VNPAY portal IPN URL at `<APP_BASE_URL>/api/vnpay/ipn` (step 4 below). The portal
-   holds one IPN URL at a time, so switching between the tunnel and Vercel means editing it.
+5. Redeploy after changing env vars or adding the database; Vercel does not apply either to an
+   existing deployment.
+6. Point the VNPAY portal IPN URL at `<APP_BASE_URL>/api/vnpay/ipn` (step 4 below). The portal
+   holds one IPN URL at a time, so switching between a local tunnel and Vercel means editing it.
 
-**What does not work on Vercel yet:** each serverless invocation may be a different process, and
-`lib/order.ts` keeps pending orders in a `Map`. The IPN can therefore land on an instance that
-never saw the checkout and answer `01`; VNPAY retries, but the retry can miss again. Treat the
-deployment as a public URL and a CI build, and run the money path locally (tunnel, or
-`npm run watch:ipn`) until the store is moved to a KV/database — item 1 in CLAUDE.md's next steps.
+**Checking that the store is really shared:** the result page distinguishes the two backends when
+it cannot find an order ("kept in memory" vs "the shared store"), and `checkout.created` logs
+`store: "redis"` or `store: "memory"`. If you see `memory` on Vercel, the env vars are not
+reaching the running deployment — redeploy.
+
+**Deployment protection:** Vercel guards preview and per-deployment URLs with Vercel
+Authentication, which answers an HTML login page instead of running the route. VNPAY cannot pass
+that, so the IPN URL must be the **production** domain, never a `…-<hash>-<scope>.vercel.app` one.
 
 ## 4. Configure the IPN URL in VNPAY (manual, once)
 

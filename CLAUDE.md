@@ -38,7 +38,8 @@ Browser                         Next.js (App Router, Node runtime)              
 | `app/api/vnpay/ipn/route.ts` | VNPAY IPN: **the only place a Sapo order is created** |
 | `lib/vnpay.ts` | VNPAY URL building, HMAC-SHA512 signing/verification, date format, codes |
 | `lib/sapo.ts` | Sapo Admin API client: payload, create, idempotent lookup |
-| `lib/order.ts` | Validation, in-memory pending-order store, IPN state machine, return classification |
+| `lib/order.ts` | Validation, IPN state machine, return classification |
+| `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
 | `lib/product.ts` | Hardcoded product (safe for client import) |
 | `lib/log.ts` | JSON logger |
@@ -69,6 +70,8 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SAPO_STORE_DOMAIN` | yes | e.g. `your-store.mysapo.net` |
 | `SAPO_API_KEY` / `SAPO_API_SECRET` | yes | Sapo Private App credentials, Orders read+write |
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
 
 Missing variables raise `MissingEnvError`; `/api/checkout` returns 500 with a generic message and logs the names. Checkout also fails fast if Sapo is not configured, so we never take a payment we cannot record.
 
@@ -121,9 +124,11 @@ Sapo's Order API overview notes payment info/transactions may not be stored for 
 
 ## Important implementation decisions
 
-- **State machine** (`lib/order.ts`): `pending → processing → completed | sapo_error`, or `pending → cancelled | failed`. `processing` is set synchronously before any `await`, so concurrent IPNs in one process cannot both create an order (the others get `99` and VNPAY retries).
+- **State machine** (`lib/order.ts`): `pending → processing → completed | sapo_error`, or `pending → cancelled | failed`.
+- **Only one IPN may process a txnRef**, and that has to hold across instances, not just within one process. `lib/store.ts` `claim()` is the primitive: Redis `SET NX EX`, so exactly one concurrent caller wins and the others get `99` and are retried by VNPAY. The claim carries a 120 s TTL — longer than the slowest `createOrderOnce` (two Sapo calls, 15 s each), shorter than VNPAY's 5-minute retry interval — so a crash between claiming and finishing frees the order instead of wedging it. The IPN re-reads the order **under** the claim, because another instance may have completed it in between; that read turns a would-be retry into a `02`.
+- A stale `processing` is therefore retryable rather than terminal. `createOrderOnce`'s Sapo lookup stays the backstop, so even a claim lost to an expiry cannot produce two Sapo orders.
 - **Sapo failure after verified payment** → status `sapo_error`, IPN returns `99` so VNPAY retries the IPN, which retries Sapo.
-- **Double idempotency**: in-memory status, plus a Sapo lookup before every create. The lookup filters server-side with `?tag=vnpay-<txnRef>` and re-checks the tag (or `note_attributes.vnp_TxnRef`) on the returned rows, so a store that ignored `tag` still matches correctly from the recent-orders list. Survives restarts/other instances as long as the pending order is known. It sends no `status` filter, so it sees open orders only — enough for a VNPAY IPN retry (within ~50 min), but an order closed in Sapo before the retry would not be found (not verified against a live store: closing an order needs a write we did not make).
+- **Double idempotency**: the stored status (Redis or Map), plus a Sapo lookup before every create. The lookup filters server-side with `?tag=vnpay-<txnRef>` and re-checks the tag (or `note_attributes.vnp_TxnRef`) on the returned rows, so a store that ignored `tag` still matches correctly from the recent-orders list. Survives restarts/other instances as long as the pending order is known. It sends no `status` filter, so it sees open orders only — enough for a VNPAY IPN retry (within ~50 min), but an order closed in Sapo before the retry would not be found (not verified against a live store: closing an order needs a write we did not make).
 - **Name split**: last word → `first_name`, rest → `last_name` (Vietnamese order).
 - Result page reads server state and auto-refreshes every 3 s while waiting for the IPN.
 - `<body>` in `app/layout.tsx` carries `suppressHydrationWarning` because browser extensions (ruttl, Grammarly, …) add attributes to it before React hydrates. It covers that element's attributes only, so real mismatches inside components still surface.
@@ -138,9 +143,10 @@ npm run dev                  # http://localhost:3000
 
 VNPAY must reach the IPN URL over public HTTPS, so for the real sandbox round trip expose the app (e.g. a tunnel to `next start`, or deploy) and set `APP_BASE_URL` + the portal IPN URL accordingly.
 
-Deploying to Vercel from GitHub is documented in README "Deploy to Vercel": the build needs no env
-vars (every route is `force-dynamic`), but the in-memory store still makes the IPN unreliable there,
-so the deployment is a public URL and a CI build, not the place to test the money path.
+Deploying to Vercel from GitHub is documented in README "Deploy to Vercel". The build needs no env
+vars (every route is `force-dynamic`). Redis **is** required there: without it each lambda keeps its
+own Map and a paid order is lost (`01`). Verified on a live deployment before Redis was added — the
+checkout, the result page and the IPN each saw a different empty store.
 
 Without that — plain `localhost`, no tunnel, no portal IPN URL — a full payment still works end to end
 with the watcher in a second terminal, which replays the genuine callback from the dev log:
@@ -182,14 +188,14 @@ The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON ins
 
 ## Known MVP limitations
 
-- **In-memory store**: pending orders are lost on restart and not shared between serverless instances. The IPN must hit the same process that created the checkout. On Vercel this is not guaranteed → IPN may get `01` (VNPAY retries, but it will keep failing on a different instance). Use `next start` on one machine for testing, or add a KV/DB before relying on Vercel.
+- **The in-memory fallback is still in-memory**: with no Redis env vars, `lib/store.ts` uses a Map, so pending orders are lost on restart and never shared between instances. That is fine for `next dev`/`next start` on one machine and wrong on Vercel, where the IPN may land on an instance that never saw the checkout and answer `01`. Configure Redis for any serverless deployment; the result page names which backend is in use when it cannot find an order.
 - If an order is lost from memory, a paid VNPAY transaction cannot be turned into a Sapo order automatically; reconcile manually via VNPAY merchant portal.
 - No querydr/refund APIs, no inventory reservation, no email receipts, no rate limiting, no CSRF token on `/api/checkout` (JSON-only POST).
 - Single product, max quantity 10.
 
 ## Next steps (not in MVP)
 
-1. Persistent store (Vercel KV/Postgres) replacing the Map in `lib/order.ts`.
+1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
 2. VNPAY `querydr` reconciliation job for orders stuck in `pending`/`sapo_error`.
 3. Read real products from Sapo (`/admin/products.json`) instead of the hardcoded one.
 

@@ -1,21 +1,17 @@
 /**
- * Order orchestration: checkout validation, the pending-order store, and the
- * IPN → Sapo state machine. Framework-independent (no Next.js imports) so it can be
- * tested on its own.
+ * Order orchestration: checkout validation and the IPN → Sapo state machine.
+ * Framework-independent (no Next.js imports) so it can be tested on its own.
  *
- * MVP STORAGE LIMITATION: pending orders live in an in-memory Map on globalThis.
- * This works when the checkout request and the VNPAY IPN reach the SAME Node process
- * (`next dev` / `next start` on one machine). It is NOT reliable on serverless
- * (Vercel) where requests may hit different instances, and all state is lost on restart.
- * Sapo itself is used as a second idempotency guard (see createOrderOnce), so a
- * duplicate IPN can never create a second Sapo order even across instances.
- * Replace `store` with a real database/KV before production.
+ * Storage lives in `lib/store.ts`, which is Redis when configured and an in-memory Map otherwise.
+ * That module also owns the cross-instance claim this file relies on to keep two concurrent IPNs
+ * from both creating a Sapo order. Sapo's own lookup in `createOrderOnce` is the second guard.
  */
 import { getSapoConfig, getVnpayConfig } from "./config";
 import { errorMessage, log } from "./log";
 import { MAX_QUANTITY, isSoldOut, maxOrderableQuantity } from "./product";
 import { getDisplayProduct } from "./catalog";
 import { createOrderOnce, type SapoOrderRef } from "./sapo";
+import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder } from "./store";
 import {
   CANCELLED_RESPONSE_CODE,
   createPaymentUrl,
@@ -25,6 +21,10 @@ import {
   type IpnResponse,
   type VnpParams,
 } from "./vnpay";
+
+export type { OrderStatus, PendingOrder } from "./store";
+export { _resetStore } from "./store";
+export type { SapoOrderRef };
 
 // ---------------------------------------------------------------------------
 // Checkout validation
@@ -71,49 +71,21 @@ export function validateCheckout(body: unknown): ValidationResult {
 }
 
 // ---------------------------------------------------------------------------
-// Pending-order store (in-memory, see limitation above)
+// Reading order state
 // ---------------------------------------------------------------------------
 
-export type OrderStatus =
-  | "pending" // payment URL issued, waiting for VNPAY
-  | "processing" // IPN accepted, creating Sapo order (acts as a lock)
-  | "completed" // paid + Sapo order exists
-  | "sapo_error" // paid, but Sapo creation failed — will retry on next IPN
-  | "cancelled" // customer cancelled at VNPAY
-  | "failed"; // payment failed
-
-export interface PendingOrder {
-  txnRef: string;
-  createdAt: string;
-  customer: { name: string; phone: string; email: string; address: string };
-  sku: string;
-  productName: string;
-  unitPriceVnd: number;
-  quantity: number;
-  amountVnd: number;
-  status: OrderStatus;
-  vnpResponseCode?: string;
-  vnpTransactionNo?: string;
-  sapoOrder?: SapoOrderRef;
-  lastError?: string;
+export async function getOrder(txnRef: string): Promise<PendingOrder | undefined> {
+  return getOrderStore().get(txnRef);
 }
 
-const g = globalThis as typeof globalThis & { __vnpaySapoOrders?: Map<string, PendingOrder> };
-const store: Map<string, PendingOrder> = (g.__vnpaySapoOrders ??= new Map());
-
-const TTL_MS = 24 * 60 * 60 * 1000;
-function prune() {
-  const cutoff = Date.now() - TTL_MS;
-  for (const [k, v] of store) if (Date.parse(v.createdAt) < cutoff) store.delete(k);
+/** Which backend holds the orders, so the result page can word a miss correctly. */
+export function orderStoreKind(): "redis" | "memory" {
+  return getOrderStore().kind;
 }
 
-export function getOrder(txnRef: string): PendingOrder | undefined {
-  return store.get(txnRef);
-}
-
-/** Test helper. */
-export function _resetStore() {
-  store.clear();
+/** Statuses the IPN must not re-apply: the outcome is already recorded. */
+function isTerminal(status: OrderStatus): boolean {
+  return status === "completed" || status === "cancelled" || status === "failed";
 }
 
 // ---------------------------------------------------------------------------
@@ -156,13 +128,17 @@ export async function startCheckout(
     });
   }
 
-  prune();
+  const store = getOrderStore();
 
+  // A txnRef is a GMT+7 timestamp plus 6 random digits, so a collision needs two checkouts in the
+  // same second that also drew the same digits; a handful of retries is more than enough.
   let txnRef = createTxnRef();
-  while (store.has(txnRef)) txnRef = createTxnRef();
+  for (let attempt = 0; attempt < 5 && (await store.has(txnRef)); attempt++) txnRef = createTxnRef();
 
   const amountVnd = product.priceVnd * input.quantity; // server-side price, never from the browser
-  store.set(txnRef, {
+  // Deliberately not guarded: if the store cannot record the order we must not hand out a payment
+  // URL, because the IPN would later have nothing to confirm. The route turns this into a 500.
+  await store.put({
     txnRef,
     createdAt: new Date().toISOString(),
     customer: { name: input.name, phone: input.phone, email: input.email, address: input.address },
@@ -180,7 +156,7 @@ export async function startCheckout(
     orderInfo: `Thanh toan don hang ${txnRef}`,
     ipAddr,
   });
-  log.info("checkout.created", { txnRef, amountVnd, quantity: input.quantity });
+  log.info("checkout.created", { txnRef, amountVnd, quantity: input.quantity, store: store.kind });
   return { txnRef, paymentUrl };
 }
 
@@ -208,7 +184,17 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
   log.info("ipn.checksum_verified", { txnRef: params.vnp_TxnRef });
 
   const txnRef = params.vnp_TxnRef ?? "";
-  const order = store.get(txnRef);
+  const store = getOrderStore();
+
+  let order: PendingOrder | undefined;
+  try {
+    order = await store.get(txnRef);
+  } catch (err) {
+    // The store is unreachable, so whether this order exists is unknown. Answering 01 would tell
+    // VNPAY the reference is wrong; 99 asks it to retry, which is what a transient outage needs.
+    log.error("ipn.store_unavailable", { txnRef, error: errorMessage(err) });
+    return { RspCode: "99", Message: "Unknown error" };
+  }
   if (!order) {
     log.warn("ipn.order_not_found", { txnRef });
     return { RspCode: "01", Message: "Order not found" };
@@ -219,23 +205,63 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     return { RspCode: "04", Message: "invalid amount" };
   }
 
-  if (order.status === "completed" || order.status === "cancelled" || order.status === "failed") {
+  if (isTerminal(order.status)) {
     log.info("ipn.duplicate", { txnRef, status: order.status });
     return { RspCode: "02", Message: "Order already confirmed" };
   }
-  if (order.status === "processing") {
-    // A concurrent IPN is creating the Sapo order right now. Ask VNPAY to retry later;
-    // the retry will see "completed" and get 02.
+
+  // Past this point only one caller may run for this txnRef, across every instance. A claim that
+  // is already held means a concurrent IPN is mid-flight: ask VNPAY to retry, and that retry will
+  // see "completed" and get 02. A claim left behind by a crash expires on its own.
+  let claimed: boolean;
+  try {
+    claimed = await store.claim(txnRef);
+  } catch (err) {
+    log.error("ipn.claim_failed", { txnRef, error: errorMessage(err) });
+    return { RspCode: "99", Message: "Unknown error" };
+  }
+  if (!claimed) {
     log.info("ipn.concurrent", { txnRef });
     return { RspCode: "99", Message: "Order is being processed" };
   }
 
-  // status is "pending" or "sapo_error" (retry)
+  try {
+    // Re-read under the claim: another instance may have finished between the read above and the
+    // claim, which makes this a duplicate rather than a retry.
+    const current = (await store.get(txnRef)) ?? order;
+    if (isTerminal(current.status)) {
+      log.info("ipn.duplicate", { txnRef, status: current.status });
+      return { RspCode: "02", Message: "Order already confirmed" };
+    }
+    return await applyIpnResult(store, current, params);
+  } catch (err) {
+    log.error("ipn.unexpected_error", { txnRef, error: errorMessage(err) });
+    return { RspCode: "99", Message: "Unknown error" };
+  } finally {
+    try {
+      await store.release(txnRef);
+    } catch (err) {
+      // The claim expires by itself, so a failed release only delays the next retry.
+      log.warn("ipn.claim_release_failed", { txnRef, error: errorMessage(err) });
+    }
+  }
+}
+
+/** Applies a verified IPN to an order the caller already holds the claim for. */
+async function applyIpnResult(store: OrderStore, order: PendingOrder, params: VnpParams): Promise<IpnResponse> {
+  const txnRef = order.txnRef;
   order.vnpResponseCode = params.vnp_ResponseCode;
   order.vnpTransactionNo = params.vnp_TransactionNo;
 
   if (!isPaymentSuccess(params)) {
     order.status = params.vnp_ResponseCode === CANCELLED_RESPONSE_CODE ? "cancelled" : "failed";
+    try {
+      await store.put(order);
+    } catch (err) {
+      // Nothing was recorded, so do not claim success: 99 makes VNPAY re-send the notification.
+      log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(err) });
+      return { RspCode: "99", Message: "Unknown error" };
+    }
     log.info("ipn.payment_not_successful", {
       txnRef,
       responseCode: params.vnp_ResponseCode,
@@ -245,6 +271,15 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
   }
 
   order.status = "processing";
+  try {
+    await store.put(order);
+  } catch (err) {
+    // Without a recorded "processing" we would lose track of an order we are about to create in
+    // Sapo. Stop here and let VNPAY retry instead.
+    log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(err) });
+    return { RspCode: "99", Message: "Unknown error" };
+  }
+
   try {
     const sapo = getSapoConfig();
     const { order: sapoOrder, created } = await createOrderOnce(sapo, {
@@ -262,6 +297,7 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     order.sapoOrder = sapoOrder;
     order.status = "completed";
     order.lastError = undefined;
+    await store.put(order);
     log.info(created ? "sapo.order_created" : "sapo.order_already_existed", {
       txnRef,
       sapoOrderId: sapoOrder.id,
@@ -273,6 +309,11 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     order.lastError = errorMessage(err);
     const e = err as { status?: number; body?: string };
     log.error("sapo.order_failed", { txnRef, error: order.lastError, status: e.status, body: e.body });
+    try {
+      await store.put(order);
+    } catch (persistErr) {
+      log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(persistErr) });
+    }
     // Payment is verified but the Sapo order is not created yet: answer 99 so VNPAY
     // retries the IPN (up to 10 times, every 5 minutes per the docs), which retries Sapo.
     return { RspCode: "99", Message: "Unknown error" };
