@@ -94,6 +94,31 @@ Docs: https://sandbox.vnpayment.vn/apis/docs/thanh-toan-pay/pay.html
 - Payment: `GET https://sandbox.vnpayment.vn/paymentv2/vpcpay.html` with `vnp_Version=2.1.0, vnp_Command=pay, vnp_TmnCode, vnp_Amount (VND×100), vnp_CurrCode=VND, vnp_TxnRef, vnp_OrderInfo (no diacritics/special chars), vnp_OrderType=other, vnp_Locale=vn, vnp_ReturnUrl, vnp_IpAddr, vnp_CreateDate, vnp_ExpireDate (+15 min)`; dates `yyyyMMddHHmmss` in GMT+7.
 - Checksum: sort params by key ascending, `key=value` joined with `&`, URL-encoded PHP-style (space → `+`), `HMAC-SHA512(hashSecret)` hex → `vnp_SecureHash`. Verification excludes `vnp_SecureHash` and `vnp_SecureHashType`.
 - IPN: GET to the IPN URL **configured in the VNPAY merchant portal** (not a request param). Must answer JSON `{"RspCode","Message"}`. VNPAY stops retrying on `00`/`02`, retries on `01/04/97/99` (up to 10×, 5-min interval).
+
+**Configuring that portal IPN URL (sandbox), verified on a live terminal.** The page is
+`https://sandbox.vnpayment.vn/merchantv2/Account/TerminalEdit.htm` — reachable directly; the menu
+path is the top-right account menu, and the edit icon sits at the far right of the website row, so
+the table has to be scrolled sideways to find it. Pick the row whose terminal is the `vnp_TmnCode`
+the app actually sends; an account with several websites will otherwise look configured and never
+receive an IPN. The form holds three fields: IPN URL, **Giao thức IPN** = `GET` (the route only
+exports GET, so POST answers 405) and **Kiểu mã hóa** = `HMACSHA512`.
+
+Two traps, both hit for real:
+
+- **`HMACSHA512` is not in the "Kiểu mã hóa" dropdown** on a 2.1.0 terminal — it offers only
+  `MD5`, `TriDes`, `SHA256`, all from older API versions, while the stored value shows as
+  `HMACSHA512`. Do not re-save the form once it is right: picking any listed value would downgrade
+  the terminal below what `lib/vnpay.ts` signs with. A save also once made the terminal vanish from
+  the list for several minutes before it came back intact.
+- **A payment URL cannot be checked with `curl -L` alone.** `vpcpay.html` answers `302` to
+  `/paymentv2/Transaction/PaymentMethod.html?token=…` and that page needs the cookie from the
+  redirect, so a cookie-less follow lands on `paymentv2/Payment/Error.html` and looks exactly like a
+  dead terminal. Use a cookie jar (`curl -sL -c jar -b jar`); a working terminal then renders
+  "Chọn phương thức thanh toán (Test)".
+
+With all three fields right the flow is fully automatic: verified live, `vnp_PayDate 20260930132702`
+(GMT+7) and Sapo order `#1015` created at `06:27:10Z` — **8 seconds** after the payment, with no
+replay, and a repeated IPN answering `02` while stock stayed put.
 - txnRef: `yyyyMMddHHmmss` (GMT+7) + 6 random digits.
 - Sandbox test card (NCB): `9704198526191432198`, `NGUYEN VAN A`, issue `07/15`, OTP `123456`.
 
