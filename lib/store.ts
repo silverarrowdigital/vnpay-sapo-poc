@@ -31,14 +31,24 @@ export type OrderStatus =
   | "cancelled" // customer cancelled at VNPAY
   | "failed"; // payment failed
 
-export interface PendingOrder {
-  txnRef: string;
-  createdAt: string;
-  customer: { name: string; phone: string; email: string; address: string };
+/**
+ * One priced line of an order. Prices are what the server resolved from Sapo at checkout time, so
+ * the IPN records what the customer actually saw even if the catalog changed in between.
+ */
+export interface PendingOrderLine {
+  /** Sapo variant id. Absent only for a legacy record written before the cart existed. */
+  variantId?: number;
   sku: string;
   productName: string;
   unitPriceVnd: number;
   quantity: number;
+}
+
+export interface PendingOrder {
+  txnRef: string;
+  createdAt: string;
+  customer: { name: string; phone: string; email: string; address: string };
+  lines: PendingOrderLine[];
   amountVnd: number;
   status: OrderStatus;
   vnpResponseCode?: string;
@@ -128,7 +138,58 @@ function toPendingOrder(raw: unknown): PendingOrder | undefined {
     log.warn("store.malformed_order", { txnRef: typeof o.txnRef === "string" ? o.txnRef : undefined });
     return undefined;
   }
-  return value as PendingOrder;
+  const lines = normaliseLines(value);
+  if (lines === undefined) {
+    log.warn("store.order_without_lines", { txnRef: o.txnRef });
+    return undefined;
+  }
+  return { ...(value as PendingOrder), lines };
+}
+
+/** The single-product record this code wrote before carts existed. */
+interface LegacyOrderFields {
+  sku?: unknown;
+  productName?: unknown;
+  unitPriceVnd?: unknown;
+  quantity?: unknown;
+}
+
+/**
+ * Reads the lines of a stored order, accepting the pre-cart shape.
+ *
+ * Production shares one key namespace across deploys of `main`, so the first deploy that
+ * understands carts will read records the previous deploy wrote for orders that were mid-payment.
+ * Those carry `sku`/`quantity` at the top level instead of `lines`; folding them into a single line
+ * here is what keeps such an order from being dropped at the moment its IPN arrives.
+ */
+function normaliseLines(value: unknown): PendingOrderLine[] | undefined {
+  const o = value as { lines?: unknown } & LegacyOrderFields;
+  if (Array.isArray(o.lines)) {
+    const lines = o.lines.filter(isPendingOrderLine);
+    return lines.length === o.lines.length && lines.length > 0 ? lines : undefined;
+  }
+  if (typeof o.sku === "string" && typeof o.unitPriceVnd === "number" && typeof o.quantity === "number") {
+    return [
+      {
+        sku: o.sku,
+        productName: typeof o.productName === "string" ? o.productName : o.sku,
+        unitPriceVnd: o.unitPriceVnd,
+        quantity: o.quantity,
+      },
+    ];
+  }
+  return undefined;
+}
+
+function isPendingOrderLine(line: unknown): line is PendingOrderLine {
+  if (typeof line !== "object" || line === null) return false;
+  const l = line as Partial<PendingOrderLine>;
+  return (
+    typeof l.sku === "string" &&
+    typeof l.productName === "string" &&
+    typeof l.unitPriceVnd === "number" &&
+    typeof l.quantity === "number"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +322,9 @@ export function getOrderStore(): OrderStore {
   }
   return cached;
 }
+
+/** Test helper: reading a stored record, so the legacy-shape fallback can be asserted. */
+export const _toPendingOrder = toPendingOrder;
 
 /** Test helper: the resolved key namespace, so the environment rules can be asserted. */
 export const _keyNamespace = keyNamespace;

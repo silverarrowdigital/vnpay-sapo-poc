@@ -161,11 +161,21 @@ export interface SapoOrderInput {
   vnpBankCode?: string;
   vnpPayDate?: string;
   customer: { name: string; phone: string; email: string; address: string };
+  lines: SapoOrderLine[];
+  totalVnd: number;
+}
+
+/**
+ * One line to create. Structurally the same as a stored order line; declared here so this module
+ * stays independent of lib/store.ts, which imports it.
+ */
+export interface SapoOrderLine {
+  /** Sapo variant id. Without one the line is created as a custom item and moves no stock. */
+  variantId?: number;
   sku: string;
   productName: string;
   unitPriceVnd: number;
   quantity: number;
-  totalVnd: number;
 }
 
 export interface SapoOrderRef {
@@ -232,15 +242,21 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
     country: "Vietnam",
   };
 
-  const lineItem = cfg.variantId
-    ? { variant_id: cfg.variantId, quantity: input.quantity, price: input.unitPriceVnd }
-    : { title: input.productName, sku: input.sku, price: input.unitPriceVnd, quantity: input.quantity };
+  // A line's own variantId wins; cfg.variantId is the fallback that keeps a legacy single-line
+  // record (written before carts existed) linked to the variant it was bought from.
+  const resolved = input.lines.map((line) => ({ line, variantId: line.variantId ?? cfg.variantId }));
+  const lineItems = resolved.map(({ line, variantId }) =>
+    variantId !== undefined
+      ? { variant_id: variantId, quantity: line.quantity, price: line.unitPriceVnd }
+      : { title: line.productName, sku: line.sku, price: line.unitPriceVnd, quantity: line.quantity },
+  );
+  const anyVariantLinked = resolved.some(({ variantId }) => variantId !== undefined);
 
   return {
     order: {
       email: input.customer.email,
       phone: input.customer.phone,
-      line_items: [lineItem],
+      line_items: lineItems,
       customer: { first_name, last_name, email: input.customer.email, phone: input.customer.phone },
       billing_address: address,
       shipping_address: address,
@@ -252,7 +268,7 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
         { name: "vnp_TransactionNo", value: input.vnpTransactionNo },
         { name: "vnp_BankCode", value: input.vnpBankCode ?? "" },
         { name: "vnp_PayDate", value: input.vnpPayDate ?? "" },
-        { name: "sku", value: input.sku },
+        { name: "sku", value: input.lines.map((l) => l.sku).join(", ") },
         { name: "amount_vnd", value: String(input.totalVnd) },
       ],
       tags: `headless-poc, vnpay, ${txnTag(input.txnRef)}`,
@@ -264,7 +280,7 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
       // here after the payment is already verified, so a refusal for being out of stock would
       // leave money taken and no order (IPN 99 → VNPAY retries → still fails). This always
       // succeeds and may drive stock negative; that is an ops problem, not a payment one.
-      ...(cfg.variantId ? { inventory_behaviour: "decrement_ignoring_policy" } : {}),
+      ...(anyVariantLinked ? { inventory_behaviour: "decrement_ignoring_policy" } : {}),
       // No source_name: Sapo reserves values like "web"/"pos" for its own channels and rejects
       // a private app that sets one (HTTP 422 "cannot be set to a protected value by an
       // untrusted API client"). The order is identified by its tags and note_attributes instead.

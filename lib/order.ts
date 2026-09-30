@@ -8,10 +8,17 @@
  */
 import { getSapoConfig, getVnpayConfig } from "./config";
 import { errorMessage, log } from "./log";
-import { MAX_QUANTITY, isSoldOut, maxOrderableQuantity } from "./product";
-import { getDisplayProduct } from "./catalog";
+import {
+  MAX_CART_LINES,
+  MAX_QUANTITY,
+  isSoldOut,
+  maxOrderableQuantity,
+  type CartLine,
+  type DisplayProduct,
+} from "./product";
+import { getDisplayProducts } from "./catalog";
 import { createOrderOnce, type SapoOrderRef } from "./sapo";
-import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder } from "./store";
+import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder, type PendingOrderLine } from "./store";
 import {
   CANCELLED_RESPONSE_CODE,
   createPaymentUrl,
@@ -22,7 +29,7 @@ import {
   type VnpParams,
 } from "./vnpay";
 
-export type { OrderStatus, PendingOrder } from "./store";
+export type { OrderStatus, PendingOrder, PendingOrderLine } from "./store";
 export { _resetStore } from "./store";
 export type { SapoOrderRef };
 
@@ -35,14 +42,43 @@ export interface CheckoutInput {
   phone: string;
   email: string;
   address: string;
-  quantity: number;
-  sku: string;
+  /** What the browser asked for. Quantities only — every price is resolved in startCheckout. */
+  lines: CartLine[];
 }
 
 export type ValidationResult = { ok: true; value: CheckoutInput } | { ok: false; errors: Record<string, string> };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const VN_PHONE_RE = /^(\+84|84|0)(3|5|7|8|9)\d{8}$/;
+
+/**
+ * Reads the cart out of a request body. Variants are only checked for plausibility here; whether
+ * they exist and can be bought is settled against the live catalog in startCheckout, because this
+ * function is synchronous and the catalog comes from Sapo.
+ */
+function readCartLines(value: unknown): { lines: CartLine[] } | { error: string } {
+  if (!Array.isArray(value) || value.length === 0) return { error: "Your cart is empty" };
+  if (value.length > MAX_CART_LINES) return { error: `A cart can hold at most ${MAX_CART_LINES} products` };
+
+  const merged = new Map<number, number>();
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null) return { error: "Invalid cart line" };
+    const r = raw as Record<string, unknown>;
+    const variantId = typeof r.variantId === "string" ? Number(r.variantId) : r.variantId;
+    const quantity = typeof r.quantity === "string" ? Number(r.quantity) : r.quantity;
+    if (typeof variantId !== "number" || !Number.isSafeInteger(variantId) || variantId <= 0)
+      return { error: "Invalid product in cart" };
+    if (typeof quantity !== "number" || !Number.isInteger(quantity) || quantity < 1)
+      return { error: `Quantity must be a whole number from 1 to ${MAX_QUANTITY}` };
+    // The same variant listed twice is a client bug, not a reason to refuse a sale: fold it.
+    merged.set(variantId, (merged.get(variantId) ?? 0) + quantity);
+  }
+
+  const lines = [...merged].map(([variantId, quantity]) => ({ variantId, quantity }));
+  if (lines.some((l) => l.quantity > MAX_QUANTITY))
+    return { error: `Quantity must be a whole number from 1 to ${MAX_QUANTITY} per product` };
+  return { lines };
+}
 
 export function validateCheckout(body: unknown): ValidationResult {
   const errors: Record<string, string> = {};
@@ -54,20 +90,19 @@ export function validateCheckout(body: unknown): ValidationResult {
   const phone = str("phone").replace(/[\s.-]/g, "");
   const email = str("email").toLowerCase();
   const address = str("address");
-  const sku = str("sku");
-  const quantity = typeof b.quantity === "string" ? Number(b.quantity) : (b.quantity as number);
 
   if (name.length < 2 || name.length > 100) errors.name = "Name must be 2–100 characters";
   if (!VN_PHONE_RE.test(phone)) errors.phone = "Enter a valid Vietnamese mobile number";
   if (!EMAIL_RE.test(email) || email.length > 254) errors.email = "Enter a valid email";
   if (address.length < 5 || address.length > 255) errors.address = "Address must be 5–255 characters";
-  // The sku is matched against the live catalog in startCheckout, not here: this function is
-  // synchronous and the catalog entry may come from Sapo.
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QUANTITY)
-    errors.quantity = `Quantity must be a whole number from 1 to ${MAX_QUANTITY}`;
 
-  if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return { ok: true, value: { name, phone, email, address, quantity, sku } };
+  const cart = readCartLines(b.lines);
+  if ("error" in cart) errors.lines = cart.error;
+
+  if (Object.keys(errors).length > 0 || !("lines" in cart)) {
+    return { ok: false, errors: Object.keys(errors).length > 0 ? errors : { lines: "Your cart is empty" } };
+  }
+  return { ok: true, value: { name, phone, email, address, lines: cart.lines } };
 }
 
 // ---------------------------------------------------------------------------
@@ -111,21 +146,39 @@ export async function startCheckout(
   const vnpay = getVnpayConfig(); // throws MissingEnvError if not configured
   getSapoConfig(); // fail fast before taking payment if Sapo is not configured
 
-  // Price and stock come from the live catalog (Sapo when SAPO_VARIANT_ID is set), never from
-  // the browser. Reading it here also means a Sapo outage stops checkout before we take money.
-  const product = await getDisplayProduct();
+  // Prices and stock come from the live catalog, never from the browser. Reading it here also
+  // means a Sapo outage stops checkout before we take money.
+  const catalog = await getDisplayProducts();
+  const byVariant = new Map<number, DisplayProduct>();
+  for (const p of catalog) if (p.variantId !== undefined) byVariant.set(p.variantId, p);
 
-  if (input.sku !== "" && input.sku !== product.sku) {
-    throw new CheckoutError("Unknown product", 400, { sku: "Unknown product" });
-  }
-  if (isSoldOut(product)) {
-    throw new CheckoutError("This product is out of stock.", 409);
-  }
-  const maxQty = maxOrderableQuantity(product);
-  if (input.quantity > maxQty) {
-    throw new CheckoutError(`Only ${maxQty} left in stock.`, 409, {
-      quantity: `Only ${maxQty} left in stock`,
+  const lines: PendingOrderLine[] = [];
+  let amountVnd = 0;
+  for (const wanted of input.lines) {
+    const product = byVariant.get(wanted.variantId);
+    if (product === undefined) {
+      // Withdrawn from Sapo, set to draft, or never existed. Either way it cannot be sold now.
+      throw new CheckoutError("A product in your cart is no longer available.", 409, {
+        lines: "A product in your cart is no longer available",
+      });
+    }
+    if (isSoldOut(product)) {
+      throw new CheckoutError(`${product.name} is out of stock.`, 409, { lines: `${product.name} is out of stock` });
+    }
+    const maxQty = maxOrderableQuantity(product);
+    if (wanted.quantity > maxQty) {
+      throw new CheckoutError(`Only ${maxQty} of ${product.name} left in stock.`, 409, {
+        lines: `Only ${maxQty} of ${product.name} left in stock`,
+      });
+    }
+    lines.push({
+      variantId: product.variantId,
+      sku: product.sku,
+      productName: product.name,
+      unitPriceVnd: product.priceVnd,
+      quantity: wanted.quantity,
     });
+    amountVnd += product.priceVnd * wanted.quantity; // server-side price, never from the browser
   }
 
   const store = getOrderStore();
@@ -135,17 +188,13 @@ export async function startCheckout(
   let txnRef = createTxnRef();
   for (let attempt = 0; attempt < 5 && (await store.has(txnRef)); attempt++) txnRef = createTxnRef();
 
-  const amountVnd = product.priceVnd * input.quantity; // server-side price, never from the browser
   // Deliberately not guarded: if the store cannot record the order we must not hand out a payment
   // URL, because the IPN would later have nothing to confirm. The route turns this into a 500.
   await store.put({
     txnRef,
     createdAt: new Date().toISOString(),
     customer: { name: input.name, phone: input.phone, email: input.email, address: input.address },
-    sku: product.sku,
-    productName: product.name,
-    unitPriceVnd: product.priceVnd,
-    quantity: input.quantity,
+    lines,
     amountVnd,
     status: "pending",
   });
@@ -156,7 +205,13 @@ export async function startCheckout(
     orderInfo: `Thanh toan don hang ${txnRef}`,
     ipAddr,
   });
-  log.info("checkout.created", { txnRef, amountVnd, quantity: input.quantity, store: store.kind });
+  log.info("checkout.created", {
+    txnRef,
+    amountVnd,
+    lines: lines.length,
+    units: lines.reduce((n, l) => n + l.quantity, 0),
+    store: store.kind,
+  });
   return { txnRef, paymentUrl };
 }
 
@@ -288,10 +343,7 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
       vnpBankCode: params.vnp_BankCode,
       vnpPayDate: params.vnp_PayDate,
       customer: order.customer,
-      sku: order.sku,
-      productName: order.productName,
-      unitPriceVnd: order.unitPriceVnd,
-      quantity: order.quantity,
+      lines: order.lines,
       totalVnd: order.amountVnd,
     });
     order.sapoOrder = sapoOrder;

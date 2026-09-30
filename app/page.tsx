@@ -1,64 +1,83 @@
-import Link from "next/link";
-import { getDisplayProduct } from "@/lib/catalog";
+import AddToCartButton from "@/components/AddToCartButton";
+import { getDisplayProducts } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, isSoldOut } from "@/lib/product";
+import { formatVnd, isSoldOut, maxOrderableQuantity } from "@/lib/product";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
 
-export default async function ProductPage() {
-  let product;
+export default async function CatalogPage() {
+  let products;
   try {
-    product = await getDisplayProduct();
+    products = await getDisplayProducts();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
       <div className="card">
-        <h1>Product unavailable</h1>
+        <h1>Catalog unavailable</h1>
         <p className="alert err">
-          Could not read the product from Sapo. Check <code>SAPO_*</code> in <code>.env.local</code> and the
-          server log.
+          Could not read products from Sapo. Check <code>SAPO_*</code> in <code>.env.local</code> and the server log.
         </p>
       </div>
     );
   }
 
-  const soldOut = isSoldOut(product);
+  if (products.length === 0) {
+    return (
+      <div className="card">
+        <h1>No products yet</h1>
+        <p className="alert warn">
+          Sapo returned no active product. Add one in Sapo admin, or check that its status is
+          <code> active</code>.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="card">
-      <p className="muted">SKU: {product.sku}</p>
-      <h1>{product.name}</h1>
+    <>
+      <div className="catalog-head">
+        <h1>Products</h1>
+        <p className="muted">Names, prices and stock read live from Sapo.</p>
+      </div>
 
-      <p className="price">
-        {formatVnd(product.priceVnd)}
-        {product.compareAtPriceVnd !== undefined && (
-          <span className="was">{formatVnd(product.compareAtPriceVnd)}</span>
-        )}
-      </p>
+      <ul className="grid">
+        {products.map((product) => {
+          const soldOut = isSoldOut(product);
+          return (
+            <li className="card product" key={product.variantId ?? product.sku}>
+              {/* Sapo products may carry no image at all, so the tile always has a frame to sit in. */}
+              <div className="thumb" aria-hidden="true">
+                {product.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
+                  <img src={product.imageUrl} alt="" />
+                ) : (
+                  <span className="thumb-empty">No image</span>
+                )}
+              </div>
 
-      {product.stock !== null && (
-        <p className={soldOut ? "stock out" : "stock in"}>
-          {soldOut ? "Out of stock" : `${product.stock} ${product.unit ?? "in stock"} available`}
-        </p>
-      )}
+              <p className="muted">SKU: {product.sku}</p>
+              <h2>{product.name}</h2>
 
-      {product.description && <p className="muted">{product.description}</p>}
+              <p className="price">
+                {formatVnd(product.priceVnd)}
+                {product.compareAtPriceVnd !== undefined && (
+                  <span className="was">{formatVnd(product.compareAtPriceVnd)}</span>
+                )}
+              </p>
 
-      {soldOut ? (
-        <button className="btn sold-out" type="button" disabled>
-          Out of stock
-        </button>
-      ) : (
-        <Link className="btn" href="/checkout">
-          Buy now
-        </Link>
-      )}
+              {product.stock !== null && (
+                <p className={soldOut ? "stock out" : "stock in"}>
+                  {soldOut ? "Out of stock" : `${product.stock} ${product.unit ?? "in stock"} available`}
+                </p>
+              )}
 
-      <p className="muted source">
-        {product.source === "sapo"
-          ? "Name, price and stock read live from Sapo."
-          : "Hardcoded product — set SAPO_VARIANT_ID to read it from Sapo."}
-      </p>
-    </div>
+              {product.description && <p className="muted clamp">{product.description}</p>}
+
+              <AddToCartButton variantId={product.variantId} soldOut={soldOut} max={maxOrderableQuantity(product)} />
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

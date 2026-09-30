@@ -15,8 +15,23 @@ export const PRODUCT = {
   priceVnd: 100_000,
 } as const;
 
-/** Hard ceiling on quantity, independent of stock. */
+/** Hard ceiling on quantity per line, independent of stock. */
 export const MAX_QUANTITY = 10;
+
+/**
+ * Hard ceiling on distinct lines in a cart. A crafted request could otherwise ask us to price an
+ * unbounded number of lines, and the Sapo order would be just as unbounded.
+ */
+export const MAX_CART_LINES = 20;
+
+/**
+ * A cart line exactly as the browser keeps and sends it: what, and how many. Never a price — the
+ * server resolves the variant against Sapo and recomputes every amount (see startCheckout).
+ */
+export interface CartLine {
+  variantId: number;
+  quantity: number;
+}
 
 /** What the UI renders and what checkout prices against. */
 export interface DisplayProduct {
@@ -40,6 +55,12 @@ export interface DisplayProduct {
   /** Where the data came from, so the UI can say so. */
   source: "sapo" | "fallback";
 }
+
+/**
+ * A product from the Sapo catalog, always backed by a real variant. The storefront only ever lists
+ * these, so nothing downstream has to handle a product it could not put in a cart.
+ */
+export type CatalogProduct = DisplayProduct & { variantId: number };
 
 /** true when the product cannot be bought right now. */
 export function isSoldOut(p: DisplayProduct): boolean {

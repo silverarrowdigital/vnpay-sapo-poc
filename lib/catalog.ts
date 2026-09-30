@@ -17,9 +17,9 @@
  */
 import { getSapoConfig } from "./config";
 import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from "./sapo";
-import { PRODUCT, type DisplayProduct } from "./product";
+import { PRODUCT, type CatalogProduct, type DisplayProduct } from "./product";
 
-function toDisplayProduct(entry: SapoCatalogEntry): DisplayProduct {
+function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
   return {
     name: entry.name,
     sku: entry.sku || PRODUCT.sku,
@@ -40,12 +40,12 @@ function toDisplayProduct(entry: SapoCatalogEntry): DisplayProduct {
  * With `SAPO_VARIANT_ID` set this returns just that one product, so the variable still pins the
  * PoC to a single item when that is what you want.
  */
-export async function getDisplayProducts(): Promise<DisplayProduct[]> {
+export async function getDisplayProducts(): Promise<CatalogProduct[]> {
   const cfg = getSapoConfig(); // throws MissingEnvError when not configured
   if (cfg.variantId !== undefined) {
-    return [toDisplayProduct(await fetchCatalogEntry(cfg, cfg.variantId))];
+    return [toCatalogProduct(await fetchCatalogEntry(cfg, cfg.variantId))];
   }
-  return (await fetchCatalogEntries(cfg)).map(toDisplayProduct);
+  return (await fetchCatalogEntries(cfg)).map(toCatalogProduct);
 }
 
 /** Reads one live product. Throws if Sapo is configured but unreachable. */
@@ -60,5 +60,5 @@ export async function getDisplayProduct(): Promise<DisplayProduct> {
       source: "fallback",
     };
   }
-  return toDisplayProduct(await fetchCatalogEntry(cfg, cfg.variantId));
+  return toCatalogProduct(await fetchCatalogEntry(cfg, cfg.variantId));
 }
