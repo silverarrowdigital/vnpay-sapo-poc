@@ -1,4 +1,4 @@
-# Hướng dẫn chạy demo VNPAY → Sapo
+ Hướng dẫn chạy demo VNPAY → Sapo
 
 Ghi nhớ nhanh. Chi tiết kỹ thuật nằm trong `CLAUDE.md`.
 

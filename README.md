@@ -23,7 +23,7 @@ Fill in `.env.local`:
 |---|---|
 | `APP_BASE_URL` | Your public HTTPS URL, no trailing slash (tunnel or deployment) |
 | `VNPAY_TMN_CODE`, `VNPAY_HASH_SECRET` | VNPAY sandbox registration email |
-| `SAPO_STORE_DOMAIN` | e.g. `sa-c.mysapo.net` |
+| `SAPO_STORE_DOMAIN` | e.g. `your-store.mysapo.net` |
 | `SAPO_API_KEY`, `SAPO_API_SECRET` | Sapo admin → Ứng dụng → Ứng dụng riêng → create app, grant Đơn hàng (Orders) read & write |
 | `SAPO_VARIANT_ID` (optional) | Id of a real variant if you want the line item linked to a Sapo product |
 

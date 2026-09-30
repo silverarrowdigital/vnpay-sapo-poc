@@ -70,7 +70,7 @@ export function getVnpayConfig(): VnpayConfig {
 }
 
 export interface SapoConfig {
-  /** e.g. "sa-c.mysapo.net" — no protocol, no trailing slash */
+  /** e.g. "your-store.mysapo.net" — no protocol, no trailing slash */
   storeDomain: string;
   apiKey: string;
   apiSecret: string;

@@ -66,7 +66,7 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `VNPAY_TMN_CODE` | yes | Sandbox terminal code |
 | `VNPAY_HASH_SECRET` | yes | Sandbox hash secret |
 | `VNPAY_PAYMENT_URL` | no | Defaults to `https://sandbox.vnpayment.vn/paymentv2/vpcpay.html` |
-| `SAPO_STORE_DOMAIN` | yes | e.g. `sa-c.mysapo.net` |
+| `SAPO_STORE_DOMAIN` | yes | e.g. `your-store.mysapo.net` |
 | `SAPO_API_KEY` / `SAPO_API_SECRET` | yes | Sapo Private App credentials, Orders read+write |
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
 
