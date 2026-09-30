@@ -1,0 +1,113 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #16181d;
+  --muted: #5f6673;
+  --border: #dfe3ea;
+  --accent: #005baa;
+  --accent-text: #ffffff;
+  --ok: #137333;
+  --warn: #b06000;
+  --err: #c5221f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418;
+    --card: #1b1e24;
+    --text: #eceef2;
+    --muted: #a0a7b4;
+    --border: #2e333c;
+    --accent: #4b9be6;
+    --accent-text: #0b0d10;
+    --ok: #6fcf8b;
+    --warn: #f0b35a;
+    --err: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+a { color: var(--accent); }
+.site-header {
+  display: flex; align-items: center; justify-content: space-between;
+  max-width: 720px; margin: 0 auto; padding: 16px;
+}
+.brand { font-weight: 700; text-decoration: none; color: var(--text); }
+.badge {
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.container { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 24px; margin-top: 16px;
+}
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 20px; margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.price { font-size: 24px; font-weight: 700; margin: 8px 0 16px; }
+.btn {
+  display: inline-block; border: 0; cursor: pointer;
+  background: var(--accent); color: var(--accent-text);
+  padding: 12px 20px; border-radius: 8px; font-size: 16px; font-weight: 600;
+  text-decoration: none;
+}
+.btn[disabled] { opacity: 0.6; cursor: progress; }
+.form { display: grid; gap: 14px; }
+.field { display: grid; gap: 4px; }
+.field label { font-weight: 600; font-size: 14px; }
+.field input, .field textarea {
+  font: inherit; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+.field .error { color: var(--err); font-size: 13px; }
+.summary { display: flex; justify-content: space-between; font-weight: 600; }
+.alert { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); margin-top: 12px; }
+.alert.ok { border-color: var(--ok); color: var(--ok); }
+.alert.warn { border-color: var(--warn); color: var(--warn); }
+.alert.err { border-color: var(--err); color: var(--err); }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0 0; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; word-break: break-all; }
+
+/* --- Live catalog data from Sapo ------------------------------------------ */
+
+/* Struck-through compare_at_price next to the selling price. */
+.price .was {
+  margin-left: 0.5rem;
+  font-size: 0.75em;
+  font-weight: 400;
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.stock {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.stock.in { color: var(--ok); }
+.stock.out { color: var(--err); }
+
+/* Small helper under a field, e.g. "Max 10 per order". */
+.hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* Footnote saying where the product data came from. */
+.source {
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+/* Sold-out button: not-allowed, unlike the submitting button which keeps cursor:progress. */
+.btn.sold-out[disabled] { cursor: not-allowed; }
