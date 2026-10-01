@@ -158,7 +158,8 @@ a { color: var(--accent); }
   border-radius: var(--radius-pill);
   border: 1px solid var(--border); color: var(--text-muted);
 }
-.container { max-width: var(--container); margin: 0 auto; padding: 0 var(--space-4) var(--space-8); }
+/* `.container` removed for the same reason: Tailwind ships a `container` utility under that exact
+   name. Nothing uses the legacy one any more — pages set their own max width. */
 .card {
   background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: var(--space-6); margin-top: var(--space-4);
@@ -242,11 +243,13 @@ dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
 .catalog-head { margin-top: var(--space-4); }
 .catalog-head h1 { margin-bottom: var(--space-1); }
 
-.grid {
-  list-style: none; padding: 0; margin: 0;
-  display: grid; gap: var(--space-4);
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-}
+/* Removed: a legacy `.grid` rule lived here, from before Tailwind.
+   `grid` is also Tailwind's own utility class, so the two collided on the same selector at the
+   same specificity — and this file loads after Tailwind's utilities, so the legacy rule won. Any
+   element written as `grid lg:grid-cols-2` silently got
+   `grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))` instead, which at 1384px wide
+   resolves to five columns. That is the "5-column grid" on the product and checkout pages: the
+   responsive classes were correct and never applied. */
 .card.product { margin-top: 0; padding: var(--space-4); display: flex; flex-direction: column; }
 .card.product h2 { font-size: var(--step-1); margin: 2px 0 0; }
 .card.product .price { font-size: var(--step-2); margin: var(--space-2) 0; }
@@ -320,7 +323,7 @@ dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
 
 /* ---- Catalog tile as a link ------------------------------------------------ */
 
-.grid > li { display: flex; }
+/* `.grid > li` removed with the `.grid` rule above — same collision with Tailwind's utility. */
 .card.product.tile {
   display: flex; flex-direction: column; gap: 2px; width: 100%;
   text-decoration: none; color: var(--text);

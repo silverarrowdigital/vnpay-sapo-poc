@@ -96,8 +96,9 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
     );
   }
 
+  // Two equal columns at desktop: delivery form left, order summary right.
   return (
-    <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] lg:gap-16">
+    <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
       <form onSubmit={onSubmit} noValidate className="order-2 lg:order-1">
         <h2 className="font-display mb-6 text-2xl font-normal">Thông tin giao hàng</h2>
 

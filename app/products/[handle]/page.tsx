@@ -90,21 +90,18 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
         </ol>
       </nav>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] lg:gap-16">
-        {/* Reference shows a multi-image grid. Sapo returns one image per product, so this grid
-            holds a single cell until the store has more; a Sanity imageSlider block can carry the
-            rest in the content section below. */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="aspect-square overflow-hidden rounded-xl bg-cream sm:col-span-2">
-            {product.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
-              <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
-            ) : (
-              <span className="flex h-full w-full items-center justify-center text-xs text-ink-soft">
-                Chưa có ảnh
-              </span>
-            )}
-          </div>
+      {/* Two equal columns at desktop: image left, details right. One column below that. */}
+      <div className="grid gap-10 lg:grid-cols-2 lg:gap-16">
+        {/* The reference shows four images in a 2×2 grid here. Sapo returns one image per product,
+            so this is a single frame; a Sanity imageSlider block carries any others in the content
+            section below. */}
+        <div className="aspect-square overflow-hidden rounded-xl bg-cream">
+          {product.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
+            <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+          ) : (
+            <span className="flex h-full w-full items-center justify-center text-xs text-ink-soft">Chưa có ảnh</span>
+          )}
         </div>
 
         <div className="lg:sticky lg:top-8 lg:self-start">
