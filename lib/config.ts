@@ -103,16 +103,18 @@ export interface SanityConfig {
   /** Pinned API date. Sanity treats an unpinned version as "whatever is current", which can change under us. */
   apiVersion: string;
   /**
-   * Read token, when the project needs one.
+   * Optional read token. **Normally unset, and should stay that way.**
    *
-   * Not always required — but "the dataset is public" is not enough on its own. Verified against
-   * this project: `datasets visibility get` reports `public` and an anonymous query returns HTTP
-   * 200, yet `count(*[_type == "productContent"])` is 0 anonymously and 1 authenticated. The
-   * dataset carries `system.group` documents, Sanity's document-access-group feature, which is
-   * the likely reason. A read token sidesteps the question entirely.
+   * A token forces reads past Sanity's CDN to the origin, which is slower and counts against the
+   * costlier request quota — on the free plan that is the limit you hit first. Published content
+   * is public anyway, so there is nothing for a token to protect here.
    *
-   * A Viewer token is enough: this app only ever reads. Drafts stay invisible regardless, because
-   * lib/sanity.ts pins `perspective: "published"`.
+   * It stays supported for one future case: reading drafts for a preview mode. That would also
+   * mean relaxing `perspective: "published"` in lib/sanity.ts, which currently hides drafts
+   * whether or not a token is present.
+   *
+   * See CLAUDE.md "Document ids must not contain a dot" for why anonymous reads once appeared to
+   * be blocked, and why the answer was an id, not a credential.
    */
   readToken?: string;
 }
@@ -140,6 +142,32 @@ export function getSanityConfig(): SanityConfig | undefined {
     apiVersion: read("SANITY_API_VERSION") ?? SANITY_DEFAULT_API_VERSION,
     readToken: readToken !== undefined && !isPlaceholder(readToken) ? readToken : undefined,
   };
+}
+
+/**
+ * Public base URL of this deployment, without a trailing slash, or `undefined` when unset.
+ *
+ * `getVnpayConfig()` demands it because a payment cannot be started without a return URL. The
+ * sitemap only wants it, and does without rather than failing a build over it.
+ */
+export function getAppBaseUrl(): string | undefined {
+  const base = read("APP_BASE_URL");
+  if (base === undefined || isPlaceholder(base)) return undefined;
+  return base.replace(/\/+$/, "");
+}
+
+/**
+ * Shared secret for Sanity's content webhook, which tells us to drop cached content.
+ *
+ * `undefined` means the route refuses every request. That is the right default: without
+ * verification anyone could call the endpoint in a loop to clear the cache, which is both a way in
+ * and a way to burn the free plan's request quota — the very thing the long cache windows exist to
+ * protect. See app/api/revalidate/route.ts.
+ */
+export function getSanityWebhookSecret(): string | undefined {
+  const secret = read("SANITY_WEBHOOK_SECRET");
+  if (secret === undefined || isPlaceholder(secret)) return undefined;
+  return secret;
 }
 
 export interface RedisConfig {
