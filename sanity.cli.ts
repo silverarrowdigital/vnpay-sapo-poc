@@ -17,7 +17,10 @@ import { defineCliConfig } from "sanity/cli";
  */
 export default defineCliConfig({
   api: {
-    projectId: process.env.SANITY_STUDIO_PROJECT_ID ?? process.env.SANITY_PROJECT_ID,
+    // Same literals as sanity.config.ts, for the same reason — see the note there. This file runs
+    // in Node where the app's own variables would resolve, but having the two configs disagree
+    // about which project they mean is its own trap.
+    projectId: process.env.SANITY_STUDIO_PROJECT_ID ?? process.env.SANITY_PROJECT_ID ?? "73i5sv8l",
     dataset: process.env.SANITY_STUDIO_DATASET ?? process.env.SANITY_DATASET ?? "production",
   },
   /**

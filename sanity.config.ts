@@ -18,10 +18,21 @@ import { structureTool } from "sanity/structure";
 import { visionTool } from "@sanity/vision";
 import { schemaTypes } from "./sanity/schemas";
 
-// SANITY_STUDIO_* is what the CLI exposes to the bundle; the app's own pair is accepted as a
-// fallback so .env.local only has to carry one set. See sanity.cli.ts.
-const projectId = process.env.SANITY_STUDIO_PROJECT_ID ?? process.env.SANITY_PROJECT_ID ?? "";
-const dataset = process.env.SANITY_STUDIO_DATASET ?? process.env.SANITY_DATASET ?? "production";
+/**
+ * Literals, not env vars with a fallback.
+ *
+ * This file is bundled for the browser, and **only** `SANITY_STUDIO_`-prefixed variables are
+ * inlined there — the app's own `SANITY_PROJECT_ID` becomes `undefined` at build time, however
+ * well it reads. An earlier version fell back to it and deployed a Studio with `projectId: ""`,
+ * which fails at runtime with "Configuration must contain `projectId`" and cannot be caught by a
+ * typecheck or a local `sanity dev` that happens to have the variable set.
+ *
+ * Neither value is a secret: the project id is in every public API URL and in next.config.ts
+ * already. Writing them down removes the whole class of failure. `SANITY_STUDIO_*` still wins if
+ * set, so a second dataset can be pointed at without editing this file.
+ */
+const projectId = process.env.SANITY_STUDIO_PROJECT_ID ?? "73i5sv8l";
+const dataset = process.env.SANITY_STUDIO_DATASET ?? "production";
 
 export default defineConfig({
   name: "default",
