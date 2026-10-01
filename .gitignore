@@ -8,3 +8,15 @@ next-env.d.ts
 .env*.local
 .vercel
 .DS_Store
+
+# Tài liệu tham chiếu giao diện: giữ HTML/CSS/font/ảnh, bỏ JS của trang gốc.
+# scripts/fetch-reference.mjs chỉ tải HTML+CSS+font nên các mẫu này chỉ có tác dụng
+# khi bạn lưu thêm bằng Ctrl+S "Webpage, Complete".
+design/reference/**/*.js
+design/reference/**/*.map
+
+# Sanity Studio build output (sanity build / sanity deploy)
+dist/
+
+# Sanity CLI generated studio runtime entrypoint
+.sanity/
