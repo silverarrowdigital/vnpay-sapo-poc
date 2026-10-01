@@ -97,6 +97,51 @@ export function getSapoConfig(): SapoConfig {
   return { storeDomain, apiKey: env.SAPO_API_KEY, apiSecret: env.SAPO_API_SECRET, variantId };
 }
 
+export interface SanityConfig {
+  projectId: string;
+  dataset: string;
+  /** Pinned API date. Sanity treats an unpinned version as "whatever is current", which can change under us. */
+  apiVersion: string;
+  /**
+   * Read token, when the project needs one.
+   *
+   * Not always required — but "the dataset is public" is not enough on its own. Verified against
+   * this project: `datasets visibility get` reports `public` and an anonymous query returns HTTP
+   * 200, yet `count(*[_type == "productContent"])` is 0 anonymously and 1 authenticated. The
+   * dataset carries `system.group` documents, Sanity's document-access-group feature, which is
+   * the likely reason. A read token sidesteps the question entirely.
+   *
+   * A Viewer token is enough: this app only ever reads. Drafts stay invisible regardless, because
+   * lib/sanity.ts pins `perspective: "published"`.
+   */
+  readToken?: string;
+}
+
+/** Default when SANITY_API_VERSION is unset. A date, never "v1" or "X". */
+export const SANITY_DEFAULT_API_VERSION = "2026-10-01";
+
+/**
+ * Optional CMS for product descriptions and the blog.
+ *
+ * Returns `undefined` rather than throwing, which is the opposite of getSapoConfig() and is
+ * deliberate: Sapo holds price and stock, so charging against stale or absent Sapo data is a
+ * money problem and must block checkout. Sanity only holds presentation, so an unconfigured or
+ * unreachable CMS has to degrade to the plain-text description instead of taking the product
+ * page down. See lib/content.ts and CLAUDE.md.
+ */
+export function getSanityConfig(): SanityConfig | undefined {
+  const projectId = read("SANITY_PROJECT_ID");
+  if (projectId === undefined || isPlaceholder(projectId)) return undefined;
+  const dataset = read("SANITY_DATASET");
+  const readToken = read("SANITY_READ_TOKEN");
+  return {
+    projectId,
+    dataset: dataset !== undefined && !isPlaceholder(dataset) ? dataset : "production",
+    apiVersion: read("SANITY_API_VERSION") ?? SANITY_DEFAULT_API_VERSION,
+    readToken: readToken !== undefined && !isPlaceholder(readToken) ? readToken : undefined,
+  };
+}
+
 export interface RedisConfig {
   url: string;
   token: string;

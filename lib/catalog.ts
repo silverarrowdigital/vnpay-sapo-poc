@@ -24,6 +24,7 @@ function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
     name: entry.name,
     sku: entry.sku || PRODUCT.sku,
     variantId: entry.variantId,
+    productId: entry.productId,
     alias: entry.alias,
     priceVnd: entry.priceVnd,
     compareAtPriceVnd: entry.compareAtPriceVnd,
