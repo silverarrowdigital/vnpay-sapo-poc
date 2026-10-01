@@ -34,7 +34,9 @@ Browser                         Next.js (App Router, Node runtime)              
 | `app/products/[handle]/page.tsx` | Product page: details, quantity, add to cart |
 | `app/checkout/page.tsx`, `components/CheckoutForm.tsx` | Cart editor + delivery form (client) |
 | `components/useCart.ts` | Cart state in `localStorage`, read through `useSyncExternalStore` |
-| `components/AddToCartForm.tsx`, `components/CartBadge.tsx`, `components/ClearCartOnSuccess.tsx` | Cart controls |
+| `components/AddToCartForm.tsx`, `components/CartMenu.tsx`, `components/ClearCartOnSuccess.tsx` | Cart controls. `CartMenu` is the header button **and** the drawer in one component, so they share open state without a context |
+| `app/api/catalog/route.ts` | Public product data for the cart drawer. Changes nothing about pricing — `/api/checkout` re-prices every line from Sapo |
+| `app/blog/page.tsx`, `app/blog/[slug]/page.tsx`, `app/blog/placeholder.ts` | Blog layout, copied from the reference in T3.7. **Data is still placeholder**; T2 swaps in `lib/blog.ts` reading Sanity and deletes `placeholder.ts` |
 | `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state |
 | `app/api/checkout/route.ts` | Validate input, start checkout, return VNPAY URL |
 | `app/api/vnpay/return/route.ts` | Browser return: checksum check + redirect. **Never mutates state.** |
@@ -45,17 +47,27 @@ Browser                         Next.js (App Router, Node runtime)              
 | `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
 | `lib/product.ts` | Hardcoded product (safe for client import) |
+| `lib/blocks.ts` | CMS block shapes — **types only, client-safe** (see conventions) |
+| `lib/sanity.ts` | Sanity read client + `groqQuery` (swallows every failure) |
+| `lib/content.ts` | `getProductContent` + `BLOCKS_PROJECTION` shared with the blog |
+| `components/blocks/*` | One component per block type + `BlockRenderer` |
+| `sanity.config.ts`, `sanity.cli.ts`, `sanity/schemas/*` | Hosted Studio config + schemas |
 | `lib/log.ts` | JSON logger |
 | `scripts/simulate-ipn.mjs` | Dev-only signed IPN simulator |
 | `scripts/replay-ipn.mjs` | Dev/recovery: replay a real VNPAY callback query string at our IPN endpoint |
 | `scripts/auto-ipn.mjs` | Dev/recovery: find that callback in the dev log by itself (`--watch` to follow) |
+| `scripts/fetch-reference.mjs` | Dev-only: re-download the UI reference into `design/reference/site/` |
+| `design/TOKENS.md` | Where every design token came from, with its source |
 
 `lib/*` is framework-independent (no `next` imports) so it can be tested in isolation. Inside `lib/`, use relative imports; app code uses `@/`.
 
 ## Coding conventions
 
-- TypeScript strict. No UI framework; plain CSS in `app/globals.css` with CSS variables (light/dark).
-- Server-only modules (`config`, `vnpay`, `sapo`, `order`, `log`) must never be imported from a `"use client"` file. Only `lib/product.ts` is client-safe.
+- TypeScript strict. **Tailwind CSS v4** (`@import "tailwindcss"` in `app/globals.css`, `postcss.config.mjs`), plus project CSS in the same file. No `tailwind.config.js` — v4 scans the project itself and declares tokens with `@theme`.
+  - Chosen so the storefront can be rebuilt faithfully from `design/reference/`, which is a Tailwind site: sharing the utility vocabulary makes the reference markup comparable class by class. An earlier decision said "plain CSS, no framework"; it was made partly on a Tailwind detection I mis-read, and is reversed. See `docs/plan/T3-ui-redesign.md`.
+  - Preflight (Tailwind's reset) removes browser defaults. Anything relying on them must be declared — e.g. `ul`/`ol` bullets in CMS rich text (`.rt-list`).
+- Server-only modules (`config`, `vnpay`, `sapo`, `order`, `log`, `sanity`, `content`) must never be imported from a `"use client"` file. Two modules in `lib/` are client-safe: `lib/product.ts`, and `lib/blocks.ts` — the latter holds types only and its single import is type-only (erased at compile time), which is what `ImageSlider`/`VideoEmbed` need. Keep it that way: no config, no client, no logger.
+- The UI is built from the token layer at the top of `app/globals.css` (`--ink`, `--accent`, `--step-*`, `--space-*`, `--radius-*`, `--font-*`), extracted from `design/reference/` with every value's source recorded in `design/TOKENS.md`. New components use the variables; no hardcoded colours or pixel values. There is **no dark mode** — the reference design has one theme, so inventing a second with nothing to check it against was not worth the contrast work.
 - Prices are always computed on the server from `PRODUCT`; never trust amounts from the browser.
 - Log with `log.info/warn/error(event, data)`. Never log secrets or full customer records (txnRef, amounts, codes, Sapo ids are fine).
 - Keep integrations in their module; routes stay thin.
@@ -76,6 +88,11 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
 | `ORDER_STORE_NAMESPACE` | no | Overrides the Redis key namespace (see below). Empty string selects production's |
+| `SANITY_PROJECT_ID` | no | Unset ⇒ the CMS is simply off and the product page shows Sapo's plain-text description |
+| `SANITY_DATASET` | no | Defaults to `production` |
+| `SANITY_API_VERSION` | no | Pinned date, defaults to `2026-10-01`. Never `v1`/`vX` |
+| `SANITY_READ_TOKEN` | **in practice yes** | Viewer token. A `public` dataset still hid content from an anonymous read on this project — see Sanity CMS flow. Without it the CMS silently looks empty |
+| `SANITY_STUDIO_PROJECT_ID` / `SANITY_STUDIO_DATASET` | no | Same two values again. Only the `SANITY_STUDIO_` prefix reaches the Studio bundle, so the CLI needs its own pair. Not used by the storefront |
 
 Missing variables raise `MissingEnvError`; `/api/checkout` returns 500 with a generic message and logs the names. Checkout also fails fast if Sapo is not configured, so we never take a payment we cannot record.
 
@@ -90,6 +107,9 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
 5. Signature comparison is constant-time.
 6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code.
 7. Never invent API endpoints. Anything new must be checked against the official docs listed below.
+8. **No CMS content is ever rendered as HTML.** `htmlToText` already strips Sapo's description; Sanity rich text goes through Portable Text into our own React elements (`components/blocks/RichText.tsx`). No `dangerouslySetInnerHTML` anywhere.
+9. **A video block stores `provider` (enum) + `videoId` (regex-validated), never a URL and never an iframe.** The player address is assembled in `components/blocks/VideoEmbed.tsx`, so nothing typed into the CMS can retarget the frame. The iframe is also not created until the reader presses play, so a reader who never watches sends no request to the video host.
+10. Links in CMS rich text are restricted by schema to `http`, `https`, `mailto`.
 
 ## VNPAY flow (API 2.1.0) — verified docs
 
@@ -151,7 +171,44 @@ Stock deduction is explicit: without an `inventory_behaviour` field Sapo default
 
 Sapo's Order API overview notes payment info/transactions may not be stored for API-created orders; the VNPAY references are therefore also in `note` and `note_attributes`.
 
+## Sanity CMS flow
+
+Holds how a product is *presented* (and, from T2, the blog). Never price, never stock, never anything checkout reads.
+
+- Client: `@sanity/client`, not `next-sanity` — `lib/*` must stay framework-independent, and next-sanity's value is its Next cache wrapper, which belongs at the app layer. `useCdn: true`, `perspective: "published"` (an editor's draft is not a product page), `timeout: 5000`.
+- **Matched on `sapoProductId`.** `alias` changes when a product is renamed and `variantId` changes when a variant is recreated; the product id is stable for the product's whole life. `SapoCatalogEntry` always had it but `toCatalogProduct` dropped it — now carried through to `CatalogProduct`, which is the only reason that field exists.
+- Blocks are read with `BLOCKS_PROJECTION` (`lib/content.ts`), shared with the blog so the two cannot drift. Its `...` spread carries simple block types through untouched, so a new block type needs no query change. Two conditional overrides resolve image assets to URLs **in the query**, which is why there is no `@sanity/image-url` here: Sanity's CDN takes sizing as query parameters, so `components/blocks/imageUrl.ts` is a pair of string helpers. Intrinsic `w`/`h` come along so markup reserves the box.
+- **`BlockRenderer` returns `null` for a `_type` it does not know.** An editor can publish a block before the code that draws it ships; a missing section beats a 500.
+- **A read token is required, and "the dataset is public" does not change that.** Verified on this project: `sanity datasets visibility get production` reports `public` and an anonymous query returns HTTP 200 — yet `count(*[_type == "productContent"])` is `0` anonymously and `1` authenticated. The dataset carries `system.group` documents (Sanity's document access groups), which is the likely cause. So `SANITY_READ_TOKEN` holds a **Viewer** token (read-only; this app never writes). Drafts stay invisible regardless, because `perspective: "published"` is pinned. Symptom when it is missing: no error at all — the CMS just looks empty and the page falls back to Sapo's description, which is the degradation working as designed but is easy to misread as a bug.
+- **In development, a stale `unstable_cache` entry survives a server restart.** Hit for real: the product page was queried before the token existed, cached `null` for its 300 s window, and then kept serving `null` across two full `next dev` restarts — the fix was `rm -rf .next`. `.next/cache` showed only `turbopack`, so the entry is not where you would look for it. When CMS content does not appear after an env or content change, clear `.next` before suspecting the query.
+- Studio is **hosted** (`npm run studio:deploy` → `*.sanity.studio`), not embedded. That keeps `sanity` a devDependency out of the Next build and lets the "no `NEXT_PUBLIC_`" rule stand. `sanity.config.ts` sits at the repo root because the CLI resolves it from the working directory; the schemas are in `sanity/schemas/`.
+- One `productContent` document per product, enforced at edit time by an async uniqueness check on `sapoProductId` (a draft and its published version are not duplicates of each other). Two documents would make which one renders arbitrary.
+
+## Storefront UI (T3)
+
+Rebuilt from `design/reference/` — the owner's own site, saved by `npm run fetch:reference`. Plan and per-step notes: `docs/plan/T3-ui-redesign.md`.
+
+- **Colours and geometry are measured, not eyeballed.** `scratchpad` scripts decoded the screenshots and took the most common colour per region, and found the grid by scanning for tile edges: page `#e7dacc`, banner `#edd2b9`, cream band `#f4ebe1`, primary `#357a38`; three 328px columns with a 16px gap. They live in `@theme` in `app/globals.css`; `design/TOKENS.md` records each one with the confidence it was measured at.
+- **T0's colour layer was wrong and is superseded.** It read the reference's `:root` declarations, which gave a white page and an orange `#BF4800` button; the rendered site is a warm beige page with a green button, and `#BF4800` is not used as a button anywhere on the eight pages saved.
+- **`formatVnd` follows the reference** (`₫248,000`, symbol first, comma groups) rather than the usual Vietnamese convention. One function, used everywhere — pricing a tile one way and the checkout another would be a bug, not fidelity. Reverting is a one-line edit in `lib/product.ts`.
+- **Nav keeps the reference's links; the unbuilt ones 404** (`/wholesale`, `/ve-chung-toi`, `/lien-he`). A link to something that does not exist should say so rather than be quietly dropped.
+
+**In the reference, deliberately not built — all for want of data, not CSS:**
+
+| | Why |
+|---|---|
+| Variant picker (95G / 200G / …) | This project takes one variant per product, the first by `position` |
+| Customer reviews | No source — Sapo does not provide them and no schema exists |
+| Multi-image product gallery | Sapo returns one image per product; the grid holds a single cell. A Sanity `imageSlider` block can carry more |
+| Filter sidebar | The reference reserves a wide left column for facets, which is why its grid sits off-centre. Sapo gives us none, so the grid is centred instead of leaving a 404px gap |
+| Payment brand marks | Third-party assets, and this project only takes VNPAY — it says so in words |
+| Logo artwork | A text wordmark is used; this is a different project |
+
 ## Important implementation decisions
+
+- **A Sanity failure degrades; a Sapo failure blocks.** `getSapoConfig()` throws because Sapo holds price and stock, and charging against data we could not read is a money problem. `getSanityConfig()` returns `undefined` and `getProductContent()` returns `undefined` on *every* failure — unconfigured, unreachable, slow, empty, or a query error — because the CMS only holds presentation, and a product that cannot be bought because the copy did not load is strictly worse than one with terse copy. Verified: with no `SANITY_*` set at all, `/products/<alias>` returns 200 with live Sapo price and stock, the add-to-cart form, and the plain-text description.
+- **CMS content is cached even though the product page is `force-dynamic`**, and the two do not conflict: `force-dynamic` is about price and stock. `unstable_cache(…, { revalidate: 300 })` at module scope in `app/products/[handle]/page.tsx`, not `use cache` — the latter needs the project-wide `cacheComponents` flag, which is a migration of every route (`node_modules/next/dist/docs/01-app/02-guides/migrating-to-cache-components.md`). It caches `null` rather than `undefined` because the cache serialises its value and "absent" has to survive the round trip. Cost: new content takes up to 5 minutes to appear — a Sanity webhook hitting a revalidate route would make it immediate, and that is the next step.
+- **Blocks render full width below the product card, not inside `.detail-body`.** A slider or a video has nowhere to go in a half-width column. The short Sapo description still sits in the column, but only when there are no blocks — blocks supersede it.
 
 - **State machine** (`lib/order.ts`): `pending → processing → completed | sapo_error`, or `pending → cancelled | failed`.
 - **Only one IPN may process a txnRef**, and that has to hold across instances, not just within one process. `lib/store.ts` `claim()` is the primitive: Redis `SET NX EX`, so exactly one concurrent caller wins and the others get `99` and are retried by VNPAY. The claim carries a 120 s TTL — longer than the slowest `createOrderOnce` (two Sapo calls, 15 s each), shorter than VNPAY's 5-minute retry interval — so a crash between claiming and finishing frees the order instead of wedging it. The IPN re-reads the order **under** the claim, because another instance may have completed it in between; that read turns a would-be retry into a `02`.
@@ -199,6 +256,8 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
 ## Test
 
 - `npm run typecheck`, `npm run lint`, `npm run build`.
+- CMS: `npm run studio:dev` for a local Studio, `npm run studio:deploy` to publish the hosted one. The **mandatory** CMS test is the degradation one — unset `SANITY_PROJECT_ID`, restart, and confirm a product page still serves price, stock and the add-to-cart form. A CMS that can take the storefront down is a bug, not a feature.
+- `npm run fetch:reference` re-downloads the UI reference. It reads the stylesheet hashes out of the fetched markup rather than hardcoding them, because they change on every deploy of the reference site and a hardcoded 404 would overwrite the CSS with an error page.
 - Env problems: see README "Troubleshooting". `.env.local` is gitignored, so it never exists in a fresh copy of the repo — `cp .env.example .env.local` and fill it in, then restart the server.
 - IPN → Sapo without VNPAY reaching you: start checkout, copy the reference from the VNPAY URL / result page, then `npm run simulate:ipn -- <txnRef> <amountVnd>`. Expect `{"RspCode":"00"}` and a new Sapo order; re-run to see `02`.
 - Full sandbox: see README "Test VNPAY Sandbox → Sapo".
@@ -252,7 +311,10 @@ The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON ins
 
 1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
 2. VNPAY `querydr` reconciliation job for orders stuck in `pending`/`sapo_error`.
-3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker, and product images (the live store has none, so tiles show a placeholder).
+3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker. (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
+4. ~~Composable product descriptions from a CMS~~ — done (T1, `docs/plan/T1-product-content.md`). Remaining: a Sanity webhook → `/api/revalidate` so publishing is immediate instead of waiting out the 5-minute cache.
+5. Blog on Sanity — planned in `docs/plan/T2-blog.md`, reuses the same block array and `BlockRenderer`.
+6. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

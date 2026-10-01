@@ -8,12 +8,23 @@ import { useCart } from "./useCart";
 type FieldErrors = Partial<Record<"name" | "phone" | "email" | "address" | "lines", string>>;
 
 /**
- * The cart and the delivery form on one page.
+ * The cart and the delivery form on one page (restyled in T3.6).
  *
- * `catalog` comes from the server so names, prices and stock are the live Sapo values; the cart
- * itself lives in the browser. The total shown here is only a display total — the request carries
- * quantities alone and the server recomputes the amount it charges.
+ * There is no reference design for checkout — it is built from the same tokens, type and controls
+ * as the pages that were copied. The behaviour below is unchanged from before the redesign, and
+ * deliberately so:
+ *
+ * - `catalog` comes from the server, so names, prices and stock are live Sapo values.
+ * - The request carries **quantities only**; the server reprices every line. The total here is a
+ *   display total.
+ * - In development the server names the env vars it could not read (never their values), and that
+ *   is surfaced below — it is the fastest way to diagnose a misconfigured `.env.local`.
+ * - The cart is not cleared here. That happens on the result page, so a cancelled payment does not
+ *   cost the customer their basket.
  */
+const FIELD_CLASS =
+  "w-full rounded-lg border border-line bg-white px-4 py-3 text-sm text-ink outline-none focus-visible:border-ink";
+
 export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] }) {
   const { lines, setQuantity, remove } = useCart();
   const [submitting, setSubmitting] = useState(false);
@@ -56,135 +67,190 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
       if (!res.ok || !json.paymentUrl) {
         setErrors(json.fields ?? {});
         const hints = [
-          json.missing?.length ? `Missing: ${json.missing.join(", ")}` : undefined,
-          json.placeholder?.length ? `Still a placeholder: ${json.placeholder.join(", ")}` : undefined,
+          json.missing?.length ? `Thiếu: ${json.missing.join(", ")}` : undefined,
+          json.placeholder?.length ? `Còn là giá trị mẫu: ${json.placeholder.join(", ")}` : undefined,
         ].filter((hint) => hint !== undefined);
-        setFormError([json.error ?? "Could not start payment.", ...hints].join(" "));
+        setFormError([json.error ?? "Không khởi tạo được thanh toán.", ...hints].join(" "));
         setSubmitting(false);
         return;
       }
-      // The cart is left alone on purpose: it is cleared on the result page once the payment is
-      // confirmed, so a cancelled payment does not cost the customer their basket.
       window.location.assign(json.paymentUrl); // hand off to VNPAY
     } catch {
-      setFormError("Network error. Please try again.");
+      setFormError("Lỗi mạng. Vui lòng thử lại.");
       setSubmitting(false);
     }
   }
 
   if (rows.length === 0) {
     return (
-      <div className="card">
-        <h2>Your cart is empty</h2>
-        <p className="muted">Add a product first.</p>
-        <Link className="btn" href="/">
-          Browse products
+      <div className="py-10">
+        <h2 className="font-display mb-3 text-2xl font-normal">Giỏ hàng đang trống</h2>
+        <p className="mb-6 text-sm text-ink-soft">Hãy chọn một sản phẩm trước.</p>
+        <Link
+          href="/"
+          className="inline-block rounded-full bg-primary px-6 py-3 text-sm tracking-wide text-primary-fg uppercase no-underline"
+        >
+          Xem sản phẩm
         </Link>
       </div>
     );
   }
 
   return (
-    <>
-      <div className="card">
-        <h2>Your cart</h2>
-        <ul className="cart-lines">
+    <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] lg:gap-16">
+      <form onSubmit={onSubmit} noValidate className="order-2 lg:order-1">
+        <h2 className="font-display mb-6 text-2xl font-normal">Thông tin giao hàng</h2>
+
+        <div className="grid gap-5">
+          <div>
+            <label htmlFor="name" className="mb-1 block text-xs tracking-wide uppercase">
+              Họ và tên
+            </label>
+            <input id="name" name="name" autoComplete="name" required maxLength={100} className={FIELD_CLASS} />
+            {errors.name && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.name}</span>}
+          </div>
+
+          <div>
+            <label htmlFor="phone" className="mb-1 block text-xs tracking-wide uppercase">
+              Số điện thoại
+            </label>
+            <input
+              id="phone"
+              name="phone"
+              type="tel"
+              autoComplete="tel"
+              placeholder="09xxxxxxxx"
+              required
+              className={FIELD_CLASS}
+            />
+            {errors.phone && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.phone}</span>}
+          </div>
+
+          <div>
+            <label htmlFor="email" className="mb-1 block text-xs tracking-wide uppercase">
+              Email
+            </label>
+            <input id="email" name="email" type="email" autoComplete="email" required className={FIELD_CLASS} />
+            {errors.email && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.email}</span>}
+          </div>
+
+          <div>
+            <label htmlFor="address" className="mb-1 block text-xs tracking-wide uppercase">
+              Địa chỉ
+            </label>
+            <textarea
+              id="address"
+              name="address"
+              autoComplete="street-address"
+              rows={2}
+              required
+              maxLength={255}
+              className={FIELD_CLASS}
+            />
+            {errors.address && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.address}</span>}
+          </div>
+        </div>
+
+        {formError && (
+          <p className="mt-5 rounded-lg border border-[color:var(--err)] px-4 py-3 text-sm text-[color:var(--err)]">
+            {formError}
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting || !canPay}
+          className="mt-6 w-full cursor-pointer rounded-full border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? "Đang chuyển tới VNPAY…" : `Thanh toán ${formatVnd(total)} qua VNPAY`}
+        </button>
+      </form>
+
+      <aside className="order-1 lg:order-2 lg:sticky lg:top-8 lg:self-start">
+        <h2 className="font-display mb-6 text-2xl font-normal">Đơn hàng</h2>
+
+        <ul className="m-0 list-none p-0">
           {rows.map(({ line, product }) => {
             if (product === undefined) {
               return (
-                <li className="cart-line gone" key={line.variantId}>
-                  <span className="cart-name">This product is no longer available</span>
-                  <button className="link-btn" type="button" onClick={() => remove(line.variantId)}>
-                    Remove
+                <li key={line.variantId} className="flex items-center justify-between gap-4 border-b border-line py-4">
+                  <span className="text-sm text-[color:var(--err)]">Sản phẩm này không còn bán</span>
+                  <button
+                    type="button"
+                    onClick={() => remove(line.variantId)}
+                    className="cursor-pointer border-0 bg-transparent text-xs underline"
+                  >
+                    Xoá
                   </button>
                 </li>
               );
             }
             const maxQty = Math.max(1, Math.min(MAX_QUANTITY, maxOrderableQuantity(product)));
             return (
-              <li className="cart-line" key={line.variantId}>
-                <span className="cart-name">
-                  {product.name}
-                  <span className="muted"> · {formatVnd(product.priceVnd)}</span>
-                </span>
-                <span className="cart-qty">
-                  <button
-                    className="step"
-                    type="button"
-                    aria-label={`Decrease quantity of ${product.name}`}
-                    onClick={() => setQuantity(line.variantId, line.quantity - 1)}
-                  >
-                    −
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={maxQty}
-                    step={1}
-                    value={line.quantity}
-                    aria-label={`Quantity of ${product.name}`}
-                    onChange={(e) =>
-                      setQuantity(line.variantId, Math.max(1, Math.min(maxQty, Number(e.target.value) || 1)))
-                    }
-                  />
-                  <button
-                    className="step"
-                    type="button"
-                    aria-label={`Increase quantity of ${product.name}`}
-                    disabled={line.quantity >= maxQty}
-                    onClick={() => setQuantity(line.variantId, line.quantity + 1)}
-                  >
-                    +
-                  </button>
-                </span>
-                <span className="cart-sum">{formatVnd(product.priceVnd * line.quantity)}</span>
-                <button
-                  className="link-btn"
-                  type="button"
-                  aria-label={`Remove ${product.name}`}
-                  onClick={() => remove(line.variantId)}
-                >
-                  Remove
-                </button>
+              <li key={line.variantId} className="flex gap-4 border-b border-line py-4">
+                <div className="h-20 w-20 flex-none overflow-hidden rounded bg-cream">
+                  {product.imageUrl !== undefined && (
+                    // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
+                    <img src={product.imageUrl} alt="" className="h-full w-full object-cover" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="m-0 text-sm leading-snug">{product.name}</p>
+                    <p className="m-0 font-mono text-sm whitespace-nowrap">
+                      {formatVnd(product.priceVnd * line.quantity)}
+                    </p>
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-3">
+                    <div className="flex items-center rounded-full border border-line">
+                      <button
+                        type="button"
+                        aria-label={`Giảm số lượng ${product.name}`}
+                        onClick={() => setQuantity(line.variantId, line.quantity - 1)}
+                        className="h-11 w-11 cursor-pointer rounded-full border-0 bg-transparent"
+                      >
+                        −
+                      </button>
+                      <span className="w-8 text-center font-mono text-sm" aria-live="polite">
+                        {line.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Tăng số lượng ${product.name}`}
+                        disabled={line.quantity >= maxQty}
+                        onClick={() => setQuantity(line.variantId, line.quantity + 1)}
+                        className="h-11 w-11 cursor-pointer rounded-full border-0 bg-transparent disabled:opacity-40"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`Xoá ${product.name}`}
+                      onClick={() => remove(line.variantId)}
+                      className="cursor-pointer border-0 bg-transparent text-xs text-ink-soft underline"
+                    >
+                      Xoá
+                    </button>
+                  </div>
+                </div>
               </li>
             );
           })}
         </ul>
-        <div className="summary">
-          <span>Total</span>
-          <span>{formatVnd(total)}</span>
-        </div>
-        {errors.lines && <div className="alert err">{errors.lines}</div>}
-        {hasUnavailable && <div className="alert warn">Remove the unavailable product to continue.</div>}
-      </div>
 
-      <form className="form card" onSubmit={onSubmit} noValidate>
-        <h2>Delivery details</h2>
-        <div className="field">
-          <label htmlFor="name">Full name</label>
-          <input id="name" name="name" autoComplete="name" required maxLength={100} />
-          {errors.name && <span className="error">{errors.name}</span>}
+        <div className="mt-5 flex items-center justify-between">
+          <span className="text-sm">Tổng cộng</span>
+          <span className="font-mono text-lg">{formatVnd(total)}</span>
         </div>
-        <div className="field">
-          <label htmlFor="phone">Phone</label>
-          <input id="phone" name="phone" type="tel" autoComplete="tel" placeholder="09xxxxxxxx" required />
-          {errors.phone && <span className="error">{errors.phone}</span>}
-        </div>
-        <div className="field">
-          <label htmlFor="email">Email</label>
-          <input id="email" name="email" type="email" autoComplete="email" required />
-          {errors.email && <span className="error">{errors.email}</span>}
-        </div>
-        <div className="field">
-          <label htmlFor="address">Address</label>
-          <textarea id="address" name="address" autoComplete="street-address" rows={2} required maxLength={255} />
-          {errors.address && <span className="error">{errors.address}</span>}
-        </div>
-        {formError && <div className="alert err">{formError}</div>}
-        <button className="btn" type="submit" disabled={submitting || !canPay}>
-          {submitting ? "Redirecting to VNPAY…" : `Pay ${formatVnd(total)} with VNPAY`}
-        </button>
-      </form>
-    </>
+
+        {errors.lines && <p className="mt-3 text-sm text-[color:var(--err)]">{errors.lines}</p>}
+        {hasUnavailable && (
+          <p className="mt-3 text-sm text-[color:var(--warn)]">Hãy xoá sản phẩm không còn bán để tiếp tục.</p>
+        )}
+      </aside>
+    </div>
   );
 }

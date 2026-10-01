@@ -16,17 +16,17 @@ export default async function CheckoutPage() {
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
-      <div className="card">
-        <h1>Checkout unavailable</h1>
-        <p className="alert err">Could not read products from Sapo. Please try again later.</p>
+      <div className="mx-auto max-w-[1416px] px-4 py-16">
+        <h1 className="font-display text-3xl font-normal">Chưa thanh toán được</h1>
+        <p className="mt-3 text-sm text-ink-soft">Không đọc được sản phẩm từ Sapo. Vui lòng thử lại sau.</p>
       </div>
     );
   }
 
   return (
-    <>
-      <h1>Checkout</h1>
+    <div className="mx-auto w-full max-w-[1416px] px-4 py-10">
+      <h1 className="font-display mb-10 text-[clamp(2rem,5vw,3.5rem)] leading-tight font-normal">Thanh toán</h1>
       <CheckoutForm catalog={catalog} />
-    </>
+    </div>
   );
 }
