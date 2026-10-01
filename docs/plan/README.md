@@ -13,7 +13,9 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 1 | **T0** — Lớp design token | [T0-design-tokens.md](T0-design-tokens.md) | ✅ Xong — nhưng **mục màu sai**, T3.1 trích lại |
 | 2 | **T1** — Product description dạng component (Sanity) | [T1-product-content.md](T1-product-content.md) | ✅ Xong và đã verify trên dữ liệu thật |
 | 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ⬅️ **Tiếp theo** (đã viết lại 2026-10-01) |
-| 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | Sau T3, đổ nội dung vào vỏ T3.7 dựng sẵn |
+| 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | ⬅️ **Tiếp theo** — viết lại 2026-10-01 theo ràng buộc gói Free |
+
+**T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
 **Thứ tự đổi 2026-10-01**: T3 lên trước T2. Design ref có sẵn trang blog list và blog detail, nên dựng giao diện trước thì T2 viết thẳng vào bố cục cuối, khỏi làm rồi sơn lại.
 

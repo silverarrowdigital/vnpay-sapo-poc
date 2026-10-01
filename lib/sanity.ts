@@ -68,3 +68,35 @@ export async function groqQuery<T>(
     return undefined;
   }
 }
+
+/** Thrown by groqQueryOrThrow when the CMS cannot answer. */
+export class SanityUnavailableError extends Error {
+  constructor(label: string, cause?: unknown) {
+    super(`Sanity query "${label}" failed`);
+    this.name = "SanityUnavailableError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * Same query, but failure is an error rather than silence.
+ *
+ * The product page swallows CMS failures because it has Sapo's own description to fall back on —
+ * a shop that stops selling because the marketing copy did not load is worse than terse copy. The
+ * blog has no fallback: an empty page there is a lie, so its pages report the outage instead and
+ * let the reader retry. Both behaviours are deliberate; see CLAUDE.md.
+ */
+export async function groqQueryOrThrow<T>(
+  label: string,
+  query: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  const sanity = sanityClient();
+  if (sanity === undefined) throw new SanityUnavailableError(`${label} (not configured)`);
+  try {
+    return await sanity.fetch<T>(query, params);
+  } catch (err) {
+    log.warn("sanity.query_failed", { label, error: errorMessage(err) });
+    throw new SanityUnavailableError(label, err);
+  }
+}

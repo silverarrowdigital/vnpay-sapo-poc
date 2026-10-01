@@ -1,6 +1,10 @@
+import Image from "next/image";
 import Link from "next/link";
+import { unstable_cache } from "next/cache";
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { PLACEHOLDER_POSTS, formatPostDate } from "./placeholder";
+import { POSTS_PER_PAGE, listPosts } from "@/lib/blog";
+import { errorMessage, log } from "@/lib/log";
 
 export const metadata: Metadata = {
   title: "Blog — VNPAY → Sapo PoC",
@@ -8,16 +12,49 @@ export const metadata: Metadata = {
 };
 
 /**
- * Blog index, laid out to match the reference (T3.7).
+ * Cached for an hour, not the five minutes product content gets.
  *
- * The data is still `placeholder.ts`. T2 replaces that import with `lib/blog.ts` reading Sanity —
- * the markup here is final, which is the whole reason T3 runs before T2.
- *
- * Unlike the product pages this one is not `force-dynamic`: nothing on it is a price or a stock
- * level, so there is nothing that must never be served stale.
+ * Nothing here is a price or a stock level, so there is nothing that must never be served stale —
+ * and on Sanity's free plan the binding limit is API requests. Caching this long is what keeps
+ * traffic to Sanity proportional to how often the blog is edited rather than how many people read
+ * it. `/api/revalidate` clears the `blog` tag the moment something is published, so the long
+ * window costs no freshness. See docs/plan/T2-blog.md.
  */
-export default function BlogIndexPage() {
-  const posts = PLACEHOLDER_POSTS;
+const cachedListPosts = unstable_cache(
+  async (page: number) => listPosts({ page }),
+  ["blog-list"],
+  { revalidate: 3600, tags: ["blog"] },
+);
+
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function readPage(value: string | string[] | undefined): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const n = Number(raw ?? "1");
+  return Number.isSafeInteger(n) && n >= 1 ? n : 1;
+}
+
+export default async function BlogIndexPage({ searchParams }: { searchParams: SearchParams }) {
+  const page = readPage((await searchParams).page);
+
+  let posts;
+  let total;
+  try {
+    ({ posts, total } = await cachedListPosts(page));
+  } catch (err) {
+    // The blog has no fallback content, so it says it is broken rather than looking empty.
+    // This is the opposite of a product page, which degrades to Sapo's own description.
+    log.error("blog.unavailable", { error: errorMessage(err) });
+    return (
+      <div className="mx-auto w-full max-w-[1416px] px-4 py-24">
+        <h1 className="font-display text-3xl font-normal">Không đọc được bài viết</h1>
+        <p className="mt-3 text-sm text-ink-soft">Hệ thống nội dung đang không phản hồi. Vui lòng thử lại sau.</p>
+      </div>
+    );
+  }
+
+  const lastPage = Math.max(1, Math.ceil(total / POSTS_PER_PAGE));
+  if (page > lastPage && total > 0) notFound();
 
   return (
     <>
@@ -39,9 +76,20 @@ export default function BlogIndexPage() {
             {posts.map((post) => (
               <li key={post.slug}>
                 <Link href={`/blog/${post.slug}`} className="group block no-underline">
-                  <div className="aspect-[16/10] overflow-hidden rounded-xl bg-cream" />
+                  <div className="relative aspect-[16/10] overflow-hidden rounded-xl bg-cream">
+                    {post.cover !== null && (
+                      <Image
+                        src={post.cover.url}
+                        alt={post.cover.alt}
+                        fill
+                        sizes="(min-width: 1024px) 440px, (min-width: 640px) 50vw, 100vw"
+                        className="object-cover"
+                      />
+                    )}
+                  </div>
                   <p className="mt-4 mb-2 text-xs text-ink-soft">
-                    {post.author} <span aria-hidden="true">|</span> {formatPostDate(post.publishedAt)}
+                    {post.authorName ?? "Hour PoC"} <span aria-hidden="true">|</span>{" "}
+                    {formatPostDate(post.publishedAt)}
                   </p>
                   <h2 className="font-display m-0 line-clamp-2 text-xl leading-snug font-normal group-hover:underline">
                     {post.title}
@@ -52,8 +100,34 @@ export default function BlogIndexPage() {
           </ul>
         )}
 
-        <p className="mt-16 mb-4 rounded border border-line bg-white py-4 text-center text-sm">Tiếp theo</p>
+        {lastPage > 1 && (
+          <nav aria-label="Phân trang" className="mt-16 mb-4 flex items-center justify-between gap-4 text-sm">
+            {page > 1 ? (
+              <Link href={page === 2 ? "/blog" : `/blog?page=${page - 1}`} rel="prev" className="no-underline">
+                ← Trang trước
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="font-mono text-xs text-ink-soft">
+              {page} / {lastPage}
+            </span>
+            {page < lastPage ? (
+              <Link href={`/blog?page=${page + 1}`} rel="next" className="no-underline">
+                Tiếp theo →
+              </Link>
+            ) : (
+              <span />
+            )}
+          </nav>
+        )}
       </div>
     </>
   );
+}
+
+/** Rendered identically on server and client, so hydration cannot disagree about a date. */
+function formatPostDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getUTCDate()} tháng ${d.getUTCMonth() + 1}, ${d.getUTCFullYear()}`;
 }

@@ -36,7 +36,11 @@ Browser                         Next.js (App Router, Node runtime)              
 | `components/useCart.ts` | Cart state in `localStorage`, read through `useSyncExternalStore` |
 | `components/AddToCartForm.tsx`, `components/CartMenu.tsx`, `components/ClearCartOnSuccess.tsx` | Cart controls. `CartMenu` is the header button **and** the drawer in one component, so they share open state without a context |
 | `app/api/catalog/route.ts` | Public product data for the cart drawer. Changes nothing about pricing — `/api/checkout` re-prices every line from Sapo |
-| `app/blog/page.tsx`, `app/blog/[slug]/page.tsx`, `app/blog/placeholder.ts` | Blog layout, copied from the reference in T3.7. **Data is still placeholder**; T2 swaps in `lib/blog.ts` reading Sanity and deletes `placeholder.ts` |
+| `app/blog/page.tsx`, `app/blog/[slug]/page.tsx` | Blog, laid out from the reference and reading Sanity |
+| `lib/blog.ts` | Post queries. Throws on failure, unlike `lib/content.ts` — see below |
+| `app/api/revalidate/route.ts` | Sanity content webhook → `revalidateTag`. Signature-checked |
+| `app/sitemap.ts` | Listings, products and posts |
+| `sanity/schemas/post.ts`, `sanity/schemas/author.ts` | Blog schemas. `post.body` uses the same `blocksField` as `productContent` |
 | `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state |
 | `app/api/checkout/route.ts` | Validate input, start checkout, return VNPAY URL |
 | `app/api/vnpay/return/route.ts` | Browser return: checksum check + redirect. **Never mutates state.** |
@@ -91,8 +95,9 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SANITY_PROJECT_ID` | no | Unset ⇒ the CMS is simply off and the product page shows Sapo's plain-text description |
 | `SANITY_DATASET` | no | Defaults to `production` |
 | `SANITY_API_VERSION` | no | Pinned date, defaults to `2026-10-01`. Never `v1`/`vX` |
-| `SANITY_READ_TOKEN` | **in practice yes** | Viewer token. A `public` dataset still hid content from an anonymous read on this project — see Sanity CMS flow. Without it the CMS silently looks empty |
+| `SANITY_READ_TOKEN` | no — **leave empty** | A token forces reads past the CDN to the origin: slower, and against the costlier quota the free plan hits first. Kept only for a future draft-preview mode |
 | `SANITY_STUDIO_PROJECT_ID` / `SANITY_STUDIO_DATASET` | no | Same two values again. Only the `SANITY_STUDIO_` prefix reaches the Studio bundle, so the CLI needs its own pair. Not used by the storefront |
+| `SANITY_WEBHOOK_SECRET` | for the webhook | Shared secret for `/api/revalidate`. Unset, that route refuses every request |
 
 Missing variables raise `MissingEnvError`; `/api/checkout` returns 500 with a generic message and logs the names. Checkout also fails fast if Sapo is not configured, so we never take a payment we cannot record.
 
@@ -179,7 +184,15 @@ Holds how a product is *presented* (and, from T2, the blog). Never price, never 
 - **Matched on `sapoProductId`.** `alias` changes when a product is renamed and `variantId` changes when a variant is recreated; the product id is stable for the product's whole life. `SapoCatalogEntry` always had it but `toCatalogProduct` dropped it — now carried through to `CatalogProduct`, which is the only reason that field exists.
 - Blocks are read with `BLOCKS_PROJECTION` (`lib/content.ts`), shared with the blog so the two cannot drift. Its `...` spread carries simple block types through untouched, so a new block type needs no query change. Two conditional overrides resolve image assets to URLs **in the query**, which is why there is no `@sanity/image-url` here: Sanity's CDN takes sizing as query parameters, so `components/blocks/imageUrl.ts` is a pair of string helpers. Intrinsic `w`/`h` come along so markup reserves the box.
 - **`BlockRenderer` returns `null` for a `_type` it does not know.** An editor can publish a block before the code that draws it ships; a missing section beats a 500.
-- **A read token is required, and "the dataset is public" does not change that.** Verified on this project: `sanity datasets visibility get production` reports `public` and an anonymous query returns HTTP 200 — yet `count(*[_type == "productContent"])` is `0` anonymously and `1` authenticated. The dataset carries `system.group` documents (Sanity's document access groups), which is the likely cause. So `SANITY_READ_TOKEN` holds a **Viewer** token (read-only; this app never writes). Drafts stay invisible regardless, because `perspective: "published"` is pinned. Symptom when it is missing: no error at all — the CMS just looks empty and the page falls back to Sapo's description, which is the degradation working as designed but is easy to misread as a bug.
+- **Document ids must not contain a dot. No read token is needed.**
+
+  The storefront reads anonymously, which is what keeps it on Sanity's CDN and off the costlier request quota. That works because of the dataset's `_.groups.public` grant, whose filter is `_id in path("*")` — **one** asterisk, which matches only ids with a *single* path segment. A dot starts a new segment.
+
+  A document created as `productContent.92442610` is therefore two segments and invisible to an anonymous read; `productContent-92442610` is one segment and visible. This was found the slow way: anonymous queries returned HTTP 200 with `result: 0` while authenticated ones returned `1`, and the only documents anonymous callers could see were image assets — whose ids (`image-<hash>-1200x900-png`) happen to contain no dots. A read token was added to work around it before the cause was understood; the token has since been deleted and the id renamed.
+
+  Studio-created documents get a UUID, which has no dots, so **this only bites ids assigned by hand** (`sanity documents create`, migrations, seed scripts). Use a dash.
+
+  Drafts stay private either way: `drafts.<id>` has a dot, so the same grant excludes it — which is also why `perspective: "published"` is belt and braces rather than the only guard.
 - **In development, a stale `unstable_cache` entry survives a server restart.** Hit for real: the product page was queried before the token existed, cached `null` for its 300 s window, and then kept serving `null` across two full `next dev` restarts — the fix was `rm -rf .next`. `.next/cache` showed only `turbopack`, so the entry is not where you would look for it. When CMS content does not appear after an env or content change, clear `.next` before suspecting the query.
 - Studio is **hosted** (`npm run studio:deploy` → `*.sanity.studio`), not embedded. That keeps `sanity` a devDependency out of the Next build and lets the "no `NEXT_PUBLIC_`" rule stand. `sanity.config.ts` sits at the repo root because the CLI resolves it from the working directory; the schemas are in `sanity/schemas/`.
 - One `productContent` document per product, enforced at edit time by an async uniqueness check on `sapoProductId` (a draft and its published version are not duplicates of each other). Two documents would make which one renders arbitrary.
@@ -204,8 +217,28 @@ Rebuilt from `design/reference/` — the owner's own site, saved by `npm run fet
 | Payment brand marks | Third-party assets, and this project only takes VNPAY — it says so in words |
 | Logo artwork | A text wordmark is used; this is a different project |
 
+## Staying on Sanity's free plan
+
+The binding limit is **API requests**, so the architecture aims at one thing: **traffic to Sanity should scale with how often content is edited, not with how many people read it.** Four rules hold that line, and breaking any one of them quietly reintroduces per-visitor requests.
+
+| # | Rule | Where |
+|---|---|---|
+| 1 | Every CMS query is cached — blog for an hour, product content for five minutes | `unstable_cache` in the page modules |
+| 2 | A webhook clears the cache on publish, so long windows cost no freshness | `app/api/revalidate/route.ts` |
+| 3 | Posts are prerendered | `generateStaticParams` in `app/blog/[slug]/page.tsx` |
+| 4 | Sanity images go through `next/image`, which resizes once and caches | `next.config.ts` `remotePatterns` |
+
+- **No read token.** A token forces reads past Sanity's CDN to the origin — slower, and against the costlier quota. See "Document ids must not contain a dot" for why one briefly seemed necessary.
+- **`/api/revalidate` refuses everything when `SANITY_WEBHOOK_SECRET` is unset**, and signature-checks every request with Sanity's own `@sanity/webhook`. An open revalidate endpoint is both a way in and a way to empty the cache in a loop, which would turn rule 2 into a way to *burn* quota. (The VNPAY HMAC is hand-rolled because that scheme is documented and verified here; getting Sanity's subtly wrong would leave a check that looks present and is not.)
+- **The webhook needs a public HTTPS URL**, so like the VNPAY IPN it cannot be exercised against `localhost`. Signature handling is verified locally instead — a correctly signed request is accepted, and one whose body changed after signing is rejected.
+- **Product images come from Sapo, not Sanity**, so Sanity asset bandwidth is near zero. Only post covers touch it.
+
+To check the rules still hold: note the request count on the project's Usage page, load `/blog` and a few posts twenty times, and look again. It should barely move. If it tracks page loads, one of the four has been lost.
+
 ## Important implementation decisions
 
+- **The blog reports CMS outages; a product page hides them.** `lib/content.ts` swallows every failure into `undefined` because the product page has Sapo's own description to fall back on. `lib/blog.ts` uses `groqQueryOrThrow` instead, because a blog has no fallback and an empty listing would be a lie. Both call the same client; the difference is only which helper they use.
+- **`sanity documents create` silently ignores NDJSON.** It takes a single document or a **JSON array**; given newline-delimited JSON it exits cleanly, prints nothing and writes nothing. Seed scripts must pass an array.
 - **A Sanity failure degrades; a Sapo failure blocks.** `getSapoConfig()` throws because Sapo holds price and stock, and charging against data we could not read is a money problem. `getSanityConfig()` returns `undefined` and `getProductContent()` returns `undefined` on *every* failure — unconfigured, unreachable, slow, empty, or a query error — because the CMS only holds presentation, and a product that cannot be bought because the copy did not load is strictly worse than one with terse copy. Verified: with no `SANITY_*` set at all, `/products/<alias>` returns 200 with live Sapo price and stock, the add-to-cart form, and the plain-text description.
 - **CMS content is cached even though the product page is `force-dynamic`**, and the two do not conflict: `force-dynamic` is about price and stock. `unstable_cache(…, { revalidate: 300 })` at module scope in `app/products/[handle]/page.tsx`, not `use cache` — the latter needs the project-wide `cacheComponents` flag, which is a migration of every route (`node_modules/next/dist/docs/01-app/02-guides/migrating-to-cache-components.md`). It caches `null` rather than `undefined` because the cache serialises its value and "absent" has to survive the round trip. Cost: new content takes up to 5 minutes to appear — a Sanity webhook hitting a revalidate route would make it immediate, and that is the next step.
 - **Blocks render full width below the product card, not inside `.detail-body`.** A slider or a video has nowhere to go in a half-width column. The short Sapo description still sits in the column, but only when there are no blocks — blocks supersede it.
