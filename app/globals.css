@@ -1,95 +1,220 @@
+/* ===========================================================================
+   Design tokens
+   ---------------------------------------------------------------------------
+   Trích từ trang mẫu trong design/reference/; nguồn từng giá trị ở
+   design/TOKENS.md. Component dùng biến, không hardcode màu hay px.
+
+   Ba điểm cố ý KHÁC trang mẫu, đều có lý do:
+
+   1. Chữ mờ dùng alpha 0.6, không phải 0.25 như trang mẫu. Ở 0.25 độ tương
+      phản chỉ ~1.7:1, trượt WCAG AA rất xa; 0.6 cho 4.81:1.
+   2. Cỡ chữ cơ sở là 1rem, không phải 0.875rem như trang mẫu. Dự án này có
+      form thanh toán: input dưới 16px làm iOS tự zoom khi focus.
+   3. --ok / --warn / --err là của ta. Trang mẫu không có màu trạng thái nào
+      (nó không có form lỗi); các giá trị này đều đạt >= 4.6:1 trên nền trắng.
+
+   Không có dark mode: trang mẫu không khai @prefers-color-scheme nào, nên
+   không có bản mẫu để đối chiếu (quyết định T0.3).
+   =========================================================================== */
+
+/* Tailwind v4. Phải đứng trước mọi rule (chỉ @charset và @layer được đứng trước @import).
+   Nó kéo theo preflight — bản reset của Tailwind — nên một vài mặc định của trình duyệt
+   (bullet của ul, cỡ chữ heading, margin) biến mất; chỗ nào dự án dựa vào mặc định đó thì
+   phải khai lại tường minh. Token của dự án sẽ chuyển dần sang @theme trong T3.1. */
+@import "tailwindcss";
+
+/* ===========================================================================
+   @theme — token của Tailwind v4, sinh ra utility (bg-page, text-ink, ...).
+   ---------------------------------------------------------------------------
+   Mọi màu dưới đây **đo từ pixel của screenshot trong design/reference/shots/**,
+   không lấy từ khai báo :root của CSS gốc. Đó là sửa lỗi của T0: T0 đọc :root và
+   ra nền trắng + nút cam, trong khi trang thật là nền be + nút xanh lá.
+
+   Cách đo: giải mã PNG rồi lấy màu phổ biến nhất trong từng vùng
+   (scratchpad/mode.mjs). Phần trăm trong ngoặc là tỉ lệ màu đó chiếm vùng đo —
+   càng cao càng chắc chắn là màu nền chứ không phải nội dung.
+   =========================================================================== */
+@theme {
+  --color-page: #e7dacc; /* nền toàn trang (100% vùng, khớp ở cả 2 trang) */
+  --color-banner: #edd2b9; /* thanh thông báo trên cùng (95%) */
+  --color-cream: #f4ebe1; /* dải section sáng hơn (100%) */
+  --color-card: #f1f0ed; /* nền thẻ feature, ngả lạnh (66%) */
+  --color-ink: #141414; /* chữ chính */
+  --color-ink-soft: #14141499; /* chữ phụ — alpha 60%, đạt 4.81:1 trên nền be */
+  --color-line: #14141426; /* viền — alpha 15% */
+  --color-primary: #357a38; /* nút chính "MUA NGAY" (95%) */
+  --color-primary-fg: #ffffff;
+
+  /* Hình học lưới sản phẩm, đo bằng cách dò biên tile trên ảnh ref
+     (scratchpad/layout.mjs): 3 cột rộng 328px, khe 16px. */
+  --spacing-tile: 328px;
+  --container-shop: 1016px; /* 3*328 + 2*16 */
+
+  --font-display: var(--font-brand-serif), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-jakarta), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-brand-mono), ui-monospace, "Cascadia Mono", monospace;
+}
+
 :root {
-  --bg: #f6f7f9;
-  --card: #ffffff;
-  --text: #16181d;
-  --muted: #5f6673;
-  --border: #dfe3ea;
-  --accent: #005baa;
-  --accent-text: #ffffff;
+  /* --- Font ---------------------------------------------------------------
+     --font-jakarta / --font-brand-* do next/font gán trong app/layout.tsx.
+     Fallback giữ trang đọc được nếu một file font không tải được. */
+  --font-body: var(--font-jakarta), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-brand-serif), Georgia, "Times New Roman", serif;
+  --font-mono: var(--font-brand-mono), ui-monospace, "Cascadia Mono", monospace;
+
+  /* --- Màu ---------------------------------------------------------------
+     Hệ đen-trắng + một màu nhấn. Xám sinh ra từ alpha của mực, không phải
+     hue riêng — nên --border và --text-muted là rgb(... / a), không phải hex.
+     Giữ --ink dạng ba số để dùng lại được với alpha. */
+  /* Trỏ về @theme ở trên. Giữ tên cũ để CSS component hiện có không phải sửa
+     từng chỗ, nhưng giá trị giờ là màu đo từ ref, không phải màu T0 đoán sai.
+     Code mới dùng utility của Tailwind (bg-page, text-ink, ...) thay vì mấy
+     biến này; chúng sẽ rụng dần khi từng trang được dựng lại. */
+  --ink: 20 20 20;
+  --bg: var(--color-page);
+  --surface: var(--color-cream);
+  --text: var(--color-ink);
+  --text-muted: var(--color-ink-soft);
+  --border: var(--color-line);
+  --border-strong: rgb(var(--ink) / 0.25);
+  --accent: var(--color-primary);
+  --accent-text: var(--color-primary-fg);
   --ok: #137333;
   --warn: #b06000;
   --err: #c5221f;
+
+  /* --- Thang chữ --------------------------------------------------------- */
+  --step--1: 0.75rem;
+  --step-0: 0.875rem;
+  --step-1: 1rem;
+  --step-2: 1.5rem;
+  --step-3: 2rem;
+  --step-4: 3rem;
+
+  /* --- Khoảng cách (bước 4px) -------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 2.25rem;
+  --space-8: 3.5rem;
+
+  /* --- Bán kính ----------------------------------------------------------
+     Trang mẫu bo tròn mạnh: nút là viên thuốc, card 12px hoặc theo em.
+     Không có --shadow-*: giao diện phẳng, phân tách bằng viền. */
+  --radius-sm: 0.4em;
+  --radius-md: 12px;
+  --radius-lg: 1.5em;
+  --radius-pill: 999px;
+
+  /* Bề rộng khung. Vẫn là 720px của bố cục hiện tại — T0 chỉ đổi giá trị
+     token, nới khung ra là việc của T3.2. */
+  --container: 720px;
+  /* Bề rộng dòng chữ dễ đọc, dùng cho thân bài viết (T2.4). */
+  --measure: 65ch;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121418;
-    --card: #1b1e24;
-    --text: #eceef2;
-    --muted: #a0a7b4;
-    --border: #2e333c;
-    --accent: #4b9be6;
-    --accent-text: #0b0d10;
-    --ok: #6fcf8b;
-    --warn: #f0b35a;
-    --err: #ff8a80;
-  }
-}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-body);
+  font-size: var(--step-1);
   line-height: 1.5;
 }
 a { color: var(--accent); }
+
+/* Viền focus nhìn thấy được trên mọi nền; :focus-visible nên chuột không thấy. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .site-header {
   display: flex; align-items: center; justify-content: space-between;
-  max-width: 720px; margin: 0 auto; padding: 16px;
+  max-width: var(--container); margin: 0 auto; padding: var(--space-4);
 }
-.brand { font-weight: 700; text-decoration: none; color: var(--text); }
+.brand {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  text-decoration: none; color: var(--text);
+}
 .badge {
-  font-size: 12px; padding: 2px 8px; border-radius: 999px;
-  border: 1px solid var(--border); color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--step--1); padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border); color: var(--text-muted);
 }
-.container { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+.container { max-width: var(--container); margin: 0 auto; padding: 0 var(--space-4) var(--space-8); }
 .card {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: 12px; padding: 24px; margin-top: 16px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: var(--space-6); margin-top: var(--space-4);
 }
-h1 { font-size: 28px; margin: 0 0 8px; }
-h2 { font-size: 20px; margin: 0 0 12px; }
-.muted { color: var(--muted); }
-.price { font-size: 24px; font-weight: 700; margin: 8px 0 16px; }
+
+h1, h2, h3 { font-family: var(--font-display); font-weight: 400; line-height: 1.15; }
+h1 { font-size: var(--step-3); margin: 0 0 var(--space-2); }
+h2 { font-size: var(--step-2); margin: 0 0 var(--space-3); }
+.muted { color: var(--text-muted); }
+.price { font-size: var(--step-2); font-weight: 700; margin: var(--space-2) 0 var(--space-4); }
 .btn {
   display: inline-block; border: 0; cursor: pointer;
   background: var(--accent); color: var(--accent-text);
-  padding: 12px 20px; border-radius: 8px; font-size: 16px; font-weight: 600;
+  font: inherit; font-weight: 600;
+  padding: var(--space-3) var(--space-5); border-radius: var(--radius-pill);
   text-decoration: none;
 }
 .btn[disabled] { opacity: 0.6; cursor: progress; }
-.form { display: grid; gap: 14px; }
-.field { display: grid; gap: 4px; }
-.field label { font-weight: 600; font-size: 14px; }
+.form { display: grid; gap: var(--space-3); }
+.field { display: grid; gap: var(--space-1); }
+.field label { font-weight: 600; font-size: var(--step-0); }
 .field input, .field textarea {
-  font: inherit; padding: 10px 12px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font: inherit; padding: var(--space-3); border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
 }
-.field .error { color: var(--err); font-size: 13px; }
+.field .error { color: var(--err); font-size: var(--step-0); }
 .summary { display: flex; justify-content: space-between; font-weight: 600; }
-.alert { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); margin-top: 12px; }
+.alert {
+  padding: var(--space-3); border-radius: var(--radius-sm);
+  border: 1px solid var(--border); margin-top: var(--space-3);
+}
 .alert.ok { border-color: var(--ok); color: var(--ok); }
 .alert.warn { border-color: var(--warn); color: var(--warn); }
 .alert.err { border-color: var(--err); color: var(--err); }
-dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 16px 0 0; }
-dl.kv dt { color: var(--muted); }
-dl.kv dd { margin: 0; word-break: break-all; }
+dl.kv {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4); margin: var(--space-4) 0 0;
+}
+dl.kv dt { color: var(--text-muted); }
+dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
 
 /* --- Live catalog data from Sapo ------------------------------------------ */
 
 /* Struck-through compare_at_price next to the selling price. */
 .price .was {
-  margin-left: 0.5rem;
+  margin-left: var(--space-2);
   font-size: 0.75em;
   font-weight: 400;
-  color: var(--muted);
+  color: var(--text-muted);
   text-decoration: line-through;
 }
 
 .stock {
-  margin: 0.25rem 0 0.75rem;
-  font-size: 0.9rem;
-  font-weight: 600;
+  margin: var(--space-1) 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--step-0);
 }
 .stock.in { color: var(--ok); }
 .stock.out { color: var(--err); }
@@ -97,16 +222,16 @@ dl.kv dd { margin: 0; word-break: break-all; }
 /* Small helper under a field, e.g. "Max 10 per order". */
 .hint {
   display: block;
-  margin-top: 0.25rem;
-  font-size: 0.8rem;
-  color: var(--muted);
+  margin-top: var(--space-1);
+  font-size: var(--step--1);
+  color: var(--text-muted);
 }
 
 /* Footnote saying where the product data came from. */
 .source {
-  margin-top: 1rem;
-  font-size: 0.8rem;
-  opacity: 0.8;
+  margin-top: var(--space-4);
+  font-size: var(--step--1);
+  color: var(--text-muted);
 }
 
 /* Sold-out button: not-allowed, unlike the submitting button which keeps cursor:progress. */
@@ -114,73 +239,76 @@ dl.kv dd { margin: 0; word-break: break-all; }
 
 /* ---- Catalog grid ---------------------------------------------------------- */
 
-.catalog-head { margin-top: 16px; }
-.catalog-head h1 { margin-bottom: 4px; }
+.catalog-head { margin-top: var(--space-4); }
+.catalog-head h1 { margin-bottom: var(--space-1); }
 
 .grid {
   list-style: none; padding: 0; margin: 0;
-  display: grid; gap: 16px;
+  display: grid; gap: var(--space-4);
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
-.card.product { margin-top: 0; padding: 16px; display: flex; flex-direction: column; }
-.card.product h2 { font-size: 17px; margin: 2px 0 0; }
-.card.product .price { font-size: 20px; margin: 8px 0; }
+.card.product { margin-top: 0; padding: var(--space-4); display: flex; flex-direction: column; }
+.card.product h2 { font-size: var(--step-1); margin: 2px 0 0; }
+.card.product .price { font-size: var(--step-2); margin: var(--space-2) 0; }
 .card.product .btn { margin-top: auto; }
 
 /* Sapo products can have no image at all, so the frame is always drawn. */
 .thumb {
-  aspect-ratio: 4 / 3; margin-bottom: 12px; border-radius: 8px; overflow: hidden;
-  border: 1px solid var(--border); background: var(--bg);
+  aspect-ratio: 4 / 3; margin-bottom: var(--space-3);
+  border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface);
   display: flex; align-items: center; justify-content: center;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.thumb-empty { font-size: 12px; color: var(--muted); }
+.thumb-empty { font-size: var(--step--1); color: var(--text-muted); }
 
 /* Keeps a long Sapo description from stretching one tile past the others. */
 .clamp {
-  font-size: 13px;
+  font-size: var(--step-0);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
 
 /* ---- Cart ----------------------------------------------------------------- */
 
 .cart-badge {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: var(--space-2);
   text-decoration: none; color: var(--text); font-weight: 600;
 }
 .cart-count {
-  min-width: 20px; padding: 0 6px; border-radius: 999px;
+  min-width: 20px; padding: 0 var(--space-2); border-radius: var(--radius-pill);
   background: var(--accent); color: var(--accent-text);
-  font-size: 12px; line-height: 20px; text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--step--1); line-height: 20px; text-align: center;
 }
 
-.cart-lines { list-style: none; padding: 0; margin: 0 0 16px; }
+.cart-lines { list-style: none; padding: 0; margin: 0 0 var(--space-4); }
 .cart-line {
-  display: grid; align-items: center; gap: 8px 12px;
+  display: grid; align-items: center; gap: var(--space-2) var(--space-3);
   grid-template-columns: 1fr auto auto auto;
-  padding: 12px 0; border-bottom: 1px solid var(--border);
+  padding: var(--space-3) 0; border-bottom: 1px solid var(--border);
 }
 .cart-line:last-child { border-bottom: 0; }
 .cart-name { font-weight: 600; }
-.cart-sum { font-variant-numeric: tabular-nums; }
+.cart-sum { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 .cart-line.gone .cart-name { color: var(--err); font-weight: 400; }
 
-.cart-qty { display: inline-flex; align-items: center; gap: 4px; }
+.cart-qty { display: inline-flex; align-items: center; gap: var(--space-1); }
 .cart-qty input {
-  width: 52px; text-align: center; padding: 6px;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--card); color: var(--text);
+  width: 52px; text-align: center; padding: var(--space-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text); font: inherit;
 }
 .step {
-  width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--card); color: var(--text);
-  font-size: 16px; line-height: 1;
+  width: 32px; height: 32px; border-radius: var(--radius-pill); cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg); color: var(--text);
+  font-size: var(--step-1); line-height: 1;
 }
 .step[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 .link-btn {
   background: none; border: 0; padding: 0; cursor: pointer;
-  color: var(--muted); font-size: 13px; text-decoration: underline;
+  color: var(--text-muted); font-size: var(--step-0); font-family: inherit;
+  text-decoration: underline;
 }
 .link-btn:hover { color: var(--err); }
 
@@ -198,29 +326,192 @@ dl.kv dd { margin: 0; word-break: break-all; }
   text-decoration: none; color: var(--text);
 }
 .card.product.tile:hover { border-color: var(--accent); }
-.tile-name { font-size: 17px; font-weight: 700; margin: 2px 0; }
-.tile .price { margin: 6px 0; }
-.tile-cta { margin-top: auto; padding-top: 10px; font-size: 13px; color: var(--accent); }
+.tile-name {
+  font-family: var(--font-display);
+  font-size: var(--step-2); margin: var(--space-1) 0;
+}
+.tile .price { margin: var(--space-2) 0; }
+.tile-cta {
+  margin-top: auto; padding-top: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--step--1); color: var(--accent);
+}
 
 /* ---- Product detail ------------------------------------------------------- */
 
-.crumb { margin: 16px 0 0; font-size: 14px; }
+.crumb { margin: var(--space-4) 0 0; font-size: var(--step-0); }
 .crumb a { color: var(--accent); text-decoration: none; }
 
-.detail { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.detail {
+  display: grid; gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
 .detail-media {
-  aspect-ratio: 1 / 1; border-radius: 12px; overflow: hidden;
-  border: 1px solid var(--border); background: var(--bg);
+  aspect-ratio: 1 / 1; border-radius: var(--radius-md); overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface);
   display: flex; align-items: center; justify-content: center;
 }
 .detail-media img { width: 100%; height: 100%; object-fit: cover; }
-.detail-body h1 { font-size: 24px; margin: 4px 0 0; }
+.detail-body h1 { font-size: var(--step-3); margin: var(--space-1) 0 0; }
 
-.add-form { display: grid; gap: 12px; margin-top: 20px; }
-.add-form .qty { display: grid; gap: 4px; }
-.add-form .qty label { font-weight: 600; font-size: 14px; }
+.add-form { display: grid; gap: var(--space-3); margin-top: var(--space-5); }
+.add-form .qty { display: grid; gap: var(--space-1); }
+.add-form .qty label { font-weight: 600; font-size: var(--step-0); }
 
 /* One column at phone width: the image above the details rather than beside them. */
 @media (max-width: 600px) {
   .detail { grid-template-columns: 1fr; }
 }
+
+/* ---- CMS content blocks ----------------------------------------------------
+   Rendered by components/blocks/. Shared by a product description and (T2) a
+   blog post body, so nothing here may assume it sits on a product page.
+   -------------------------------------------------------------------------- */
+
+.blocks { display: grid; gap: var(--space-7); margin-top: var(--space-6); }
+
+/* --- Rich text --- */
+
+.rt > :first-child { margin-top: 0; }
+.rt > :last-child { margin-bottom: 0; }
+.rt p { max-width: var(--measure); margin: 0 0 var(--space-4); }
+.rt h2 { font-size: var(--step-2); margin: var(--space-6) 0 var(--space-3); }
+.rt h3 { font-size: var(--step-1); margin: var(--space-5) 0 var(--space-2); }
+/* Preflight của Tailwind đặt `ul, ol { list-style: none }`, nên bullet và số thứ tự phải
+   khai lại tường minh — rich text từ CMS dựa vào chúng để đọc được. */
+.rt-list { max-width: var(--measure); margin: 0 0 var(--space-4); padding-left: var(--space-5); }
+.rt ul.rt-list { list-style: disc; }
+.rt ol.rt-list { list-style: decimal; }
+.rt-list li { margin-bottom: var(--space-1); }
+.rt-quote {
+  max-width: var(--measure);
+  margin: var(--space-5) 0;
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--accent);
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  line-height: 1.3;
+}
+
+/* --- Image slider ---
+   A real scroll container with snap points, so dragging and the arrow keys work
+   without any JS; the buttons only nudge scrollLeft. */
+
+.slider-track {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-auto-flow: column; grid-auto-columns: 100%;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  border-radius: var(--radius-md);
+}
+.slider-track::-webkit-scrollbar { display: none; }
+.slider-slide { scroll-snap-align: start; }
+.slider-slide img {
+  display: block; width: 100%; height: auto;
+  aspect-ratio: var(--slide-aspect, 4 / 3);
+  object-fit: cover;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+}
+.slider-caption {
+  margin: var(--space-2) 0 0;
+  font-size: var(--step-0);
+  color: var(--text-muted);
+}
+.slider-controls {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: var(--space-3); margin-top: var(--space-3);
+}
+.slider-btn {
+  /* 44px: the smallest comfortable touch target, and these sit at the screen edge. */
+  width: 44px; height: 44px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  background: var(--bg); color: var(--text);
+  font-size: var(--step-1); line-height: 1; cursor: pointer;
+}
+.slider-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.slider-count {
+  margin: 0 auto 0 0;
+  font-family: var(--font-mono); font-size: var(--step-0);
+  color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+
+/* --- FAQ ---
+   <details>/<summary>, so it works with JS disabled. */
+
+.faq-item { border-bottom: 1px solid var(--border); }
+.faq-item summary {
+  cursor: pointer; list-style: none;
+  padding: var(--space-4) 0;
+  font-weight: 600;
+  display: flex; justify-content: space-between; gap: var(--space-4);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary::after {
+  content: "+";
+  font-family: var(--font-mono); color: var(--accent); flex: none;
+}
+.faq-item[open] summary::after { content: "−"; }
+.faq-answer { padding-bottom: var(--space-4); }
+.faq-answer .rt p:last-child { margin-bottom: 0; }
+
+/* --- Video ---
+   No iframe exists until the cover is pressed, so nothing is requested from the
+   video host for a reader who never watches. */
+
+.video-cover {
+  position: relative; display: block; width: 100%; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;
+  background: var(--surface); color: var(--text); font: inherit;
+  aspect-ratio: 16 / 9;
+}
+.video-cover img { width: 100%; height: 100%; object-fit: cover; }
+.video-play {
+  position: absolute; inset: 0; margin: auto;
+  width: 64px; height: 64px; border-radius: var(--radius-pill);
+  background: var(--accent); color: var(--accent-text);
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--step-2);
+}
+.video-label {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: var(--space-3);
+  background: rgb(var(--ink) / 0.72); color: #fff;
+  font-size: var(--step-0); text-align: left;
+}
+.video-frame {
+  display: block; width: 100%; aspect-ratio: 16 / 9;
+  border: 0; border-radius: var(--radius-md); background: var(--surface);
+}
+
+/* --- Specs --- */
+
+.specs-list { margin: 0; display: grid; gap: 0; }
+.specs-row {
+  display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.specs-row:last-child { border-bottom: 0; }
+.specs-row dt { color: var(--text-muted); }
+.specs-row dd { margin: 0; }
+
+@media (max-width: 520px) {
+  .specs-row { grid-template-columns: 1fr; gap: var(--space-1); }
+}
+
+/* --- Callout --- */
+
+.callout {
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface);
+}
+.callout.info { border-left-color: var(--accent); }
+.callout.warn { border-left-color: var(--warn); }
+.callout.success { border-left-color: var(--ok); }
+.callout-heading { margin: 0 0 var(--space-1); font-weight: 600; }
+.callout-body { margin: 0; max-width: var(--measure); }
