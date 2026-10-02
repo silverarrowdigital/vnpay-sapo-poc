@@ -371,7 +371,16 @@ dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
    blog post body, so nothing here may assume it sits on a product page.
    -------------------------------------------------------------------------- */
 
-.blocks { display: grid; gap: var(--space-7); margin-top: var(--space-6); }
+/* overflow-wrap kế thừa được, nên một khai báo ở đây phủ mọi khối, kể cả khối
+   viết sau này. Chữ trong CMS do người gõ, và một URL dán vào là chuỗi không có
+   chỗ ngắt: thiếu dòng này, nó nong rộng ô lưới chứa nó và đẩy cả trang cuộn
+   ngang trên điện thoại — hỏng ở mobile trong khi desktop trông vẫn ổn. */
+.blocks {
+  display: grid;
+  gap: var(--space-7);
+  margin-top: var(--space-6);
+  overflow-wrap: break-word;
+}
 
 /* --- Rich text --- */
 
