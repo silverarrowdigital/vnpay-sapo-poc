@@ -130,9 +130,27 @@ Dù chọn mức nào: **phí phải cộng vào số tiền gửi sang VNPAY** 
 
 Luồng: khách nhập mã → server hỏi Sapo mã có thật/còn hạn/đủ điều kiện không → server tính lại tổng → ký URL VNPAY theo tổng **sau giảm** → khi tạo đơn, gửi kèm `discount_codes` để Sapo ghi nhận.
 
-**Chặn ở một việc nhỏ của bạn: store hiện có 0 price rule.** Không có dữ liệu thật thì không đọc được hình dạng của nó, và viết code theo phỏng đoán là đúng thứ `CLAUDE.md` cấm. Bạn tạo giúp **một mã giảm giá thử** trong Sapo (ví dụ `TEST10`, giảm 10%, không giới hạn) rồi báo tôi — tôi đọc cấu trúc thật rồi mới viết.
+**Hình dạng API đã verify trên dữ liệu thật (2026-10-02, quy tắc `TEST10`).** Không còn chỗ nào phải đoán:
 
-Cần biết từ dữ liệu thật: tên trường của mức giảm, kiểu giảm (phần trăm hay số tiền), điều kiện áp dụng, hạn dùng, giới hạn lượt, và đường dẫn lồng để tra một mã cụ thể. Cộng thêm: `POST /admin/orders.json` nhận `discount_codes` ở dạng nào.
+- Hệ giảm giá là `GET /admin/price_rules.json`.
+- **Mã khách nhập KHÔNG phải `title` của quy tắc.** Mã nằm ở `GET /admin/price_rules/{id}/discount_codes.json` → `{"discount_codes":[{id, code, usage_count}]}`. Lần thử này `title` trùng `code` chỉ vì gõ giống nhau; `title` là nhãn người biên tập đổi lúc nào cũng được.
+- **`?code=` và `?title=` bị bỏ qua lặng lẽ, trả về toàn bộ quy tắc.** Chỉ `?query=` lọc thật, và nó là **tìm chuỗi con, không phân biệt hoa thường**: `?query=T` cũng ra `TEST10`.
+- Mức giảm: `value` là **chuỗi âm** (`"-10"`), `value_type: "percentage"`. `summary` có sẵn câu tiếng Việt *"Giảm 10% cho toàn bộ đơn hàng"* — hiện thẳng cho khách, đừng tự dựng lại câu.
+- Điều kiện: `status`, `starts_on`, `ends_on`, `usage_limit` so với `times_used`, `once_per_customer`, `prerequisite_subtotal_range`, `prerequisite_quantity_range`, `value_limit_amount`, các mảng `entitled_*_ids`.
+
+**Thuật toán kiểm mã, bắt buộc theo đúng thứ tự này:**
+
+1. `?query=<mã>` để thu hẹp — **chỉ thu hẹp, không coi là đã tìm thấy**
+2. Với từng ứng viên, đọc `discount_codes` lồng bên trong và **so khớp `code` chính xác**
+3. Kiểm `status`, khoảng ngày, `usage_limit` vs `times_used`
+4. Kiểm điều kiện đơn hàng (`prerequisite_*`) với giỏ **đã tính lại giá từ Sapo**
+5. Tính tiền giảm **ở server**, chặn trần bằng `value_limit_amount`
+6. Ký URL VNPAY theo tổng **sau giảm**
+7. Khi tạo đơn, gửi kèm `discount_codes` để Sapo ghi nhận
+
+Bước 2 không phải thừa: bỏ nó thì khách gõ `T` cũng ăn giảm 10%.
+
+Còn **một** thứ chưa verify: `POST /admin/orders.json` nhận `discount_codes` ở dạng nào. Phải thử trên đơn thật trước khi tin.
 
 **Nghiệm thu**: mã sai bị từ chối; mã hết hạn bị từ chối; mã thật giảm đúng; VNPAY thu đúng số sau giảm; đơn Sapo ghi đúng mã và đúng mức giảm. Và một bài riêng: **sửa số tiền giảm trong request** phải bị server bác.
 

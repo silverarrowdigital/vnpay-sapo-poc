@@ -162,6 +162,13 @@ replay, and a repeated IPN answering `02` while stock stayed put.
 
 Payload sent (see `buildOrderPayload`): email, phone, `line_items` — one per cart line, each either `{variant_id, quantity, price}` or, with no variant, custom `{title, sku, price, quantity}`, `customer {first_name, last_name, email, phone}`, billing + shipping address (`address1`, `country: Vietnam`), `financial_status: "paid"`, `transactions [{kind: sale, status: success, amount, gateway: VNPAY}]`, `note`, `note_attributes` (vnp_TxnRef, vnp_TransactionNo, vnp_BankCode, vnp_PayDate, sku, amount_vnd), `tags` (`headless-poc, vnpay, vnpay-<txnRef>`), receipts off.
 
+**Discounts live in `price_rules`, and the code is not where it looks.** Verified against a live store on 2026-10-02 with one real rule created for the purpose:
+
+- `GET /admin/price_rules.json` is the discount system. `/admin/discounts.json` answers `access_denied` even with the Khuyến mãi scope on, and a top-level `/admin/discount_codes.json` is not a route at all — neither is needed, and neither should be chased by granting more access.
+- **The customer-facing code is not the rule's `title`.** It lives in `GET /admin/price_rules/{id}/discount_codes.json` → `{"discount_codes":[{id, code, usage_count}]}`. A rule's title merely happened to equal its code in the test because both were typed the same; matching on `title` would be matching on a label an editor can rename freely.
+- **`?code=` and `?title=` are silently ignored — they return every rule.** Only `?query=` filters, and it is a **fuzzy, case-insensitive substring search**: `?query=T` returns `TEST10`. So it narrows the candidates and never identifies one. Re-check the exact `code` on the nested resource before honouring anything, exactly as `findOrderByTxnRef` re-checks the tag. This is the `?tag` / `?tags` trap in a second place.
+- Value shape: `value` is a **negative string** (`"-10"`) with `value_type: "percentage"`. Conditions ride on `status`, `starts_on`, `ends_on`, `usage_limit` vs `times_used`, `once_per_customer`, `prerequisite_subtotal_range`, `prerequisite_quantity_range`, `value_limit_amount` and the `entitled_*_ids` lists. `summary` carries a ready-made Vietnamese sentence ("Giảm 10% cho toàn bộ đơn hàng") worth showing the customer rather than re-deriving.
+
 **Two Sapo deviations from the Shopify-style API, both verified against a live store:**
 
 - **No `source_name`.** Sapo reserves values like `web`/`pos` for its own channels and rejects a private app that sets one: `HTTP 422 {"errors":{"source_name":["cannot be set to a protected value by an untrusted API client."]}}`. The order is identified by `tags` and `note_attributes` instead.
