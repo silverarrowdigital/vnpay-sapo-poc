@@ -61,6 +61,7 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/replay-ipn.mjs` | Dev/recovery: replay a real VNPAY callback query string at our IPN endpoint |
 | `scripts/auto-ipn.mjs` | Dev/recovery: find that callback in the dev log by itself (`--watch` to follow) |
 | `scripts/fetch-reference.mjs` | Dev-only: re-download the UI reference into `design/reference/site/` |
+| `scripts/check-revalidate.mjs` | Dev-only: four signed/unsigned requests at `/api/revalidate`, checking what the signature guard actually refuses |
 | `design/TOKENS.md` | Where every design token came from, with its source |
 
 `lib/*` is framework-independent (no `next` imports) so it can be tested in isolation. Inside `lib/`, use relative imports; app code uses `@/`.
@@ -234,7 +235,7 @@ The binding limit is **API requests**, so the architecture aims at one thing: **
 
 - **No read token.** A token forces reads past Sanity's CDN to the origin — slower, and against the costlier quota. See "Document ids must not contain a dot" for why one briefly seemed necessary.
 - **`/api/revalidate` refuses everything when `SANITY_WEBHOOK_SECRET` is unset**, and signature-checks every request with Sanity's own `@sanity/webhook`. An open revalidate endpoint is both a way in and a way to empty the cache in a loop, which would turn rule 2 into a way to *burn* quota. (The VNPAY HMAC is hand-rolled because that scheme is documented and verified here; getting Sanity's subtly wrong would leave a check that looks present and is not.)
-- **The webhook needs a public HTTPS URL**, so like the VNPAY IPN it cannot be exercised against `localhost`. Signature handling is verified locally instead — a correctly signed request is accepted, and one whose body changed after signing is rejected.
+- **The webhook needs a public HTTPS URL**, so like the VNPAY IPN it cannot be exercised against `localhost`. Signature handling is verified locally instead, by `npm run check:revalidate`: a correctly signed `productContent` clears only the `product-content` tag, a signed `post` only `blog`, a body changed after signing is refused `401`, and so is a request with no signature header. Point it at a deployment with `npm run check:revalidate -- https://host`.
 - **Product images come from Sapo, not Sanity**, so Sanity asset bandwidth stays low. Post covers touch it, and from T4 so do `logoRow`/`steps`/`featureGrid` images on a product page — which is why those three blocks render through `next/image` rather than the `imageUrl.ts` helpers the older blocks use: Next resizes once and caches, so repeat views cost no Sanity bandwidth. They pass the **bare** asset URL, because `next.config.ts` pins `search: ""` on `cdn.sanity.io` and a URL carrying `?w=…` would be refused.
 
 To check the rules still hold: note the request count on the project's Usage page, load `/blog` and a few posts twenty times, and look again. It should barely move. If it tracks page loads, one of the four has been lost.
@@ -295,6 +296,7 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
 - `npm run typecheck`, `npm run lint`, `npm run build`.
 - CMS: `npm run studio:dev` for a local Studio, `npm run studio:deploy` to publish the hosted one. The **mandatory** CMS test is the degradation one — unset `SANITY_PROJECT_ID`, restart, and confirm a product page still serves price, stock and the add-to-cart form. A CMS that can take the storefront down is a bug, not a feature.
 - `npm run fetch:reference` re-downloads the UI reference. It reads the stylesheet hashes out of the fetched markup rather than hardcoding them, because they change on every deploy of the reference site and a hardcoded 404 would overwrite the CSS with an error page.
+- Revalidate webhook: `npm run check:revalidate` with the dev server running. All four cases must pass — two accepted with the right tag, two refused. What is left after that is configuration only: the webhook in the Sanity dashboard (`POST` to `https://<deployment>/api/revalidate`, secret = `SANITY_WEBHOOK_SECRET`) and that same variable set on the deployment.
 - Env problems: see README "Troubleshooting". `.env.local` is gitignored, so it never exists in a fresh copy of the repo — `cp .env.example .env.local` and fill it in, then restart the server.
 - IPN → Sapo without VNPAY reaching you: start checkout, copy the reference from the VNPAY URL / result page, then `npm run simulate:ipn -- <txnRef> <amountVnd>`. Expect `{"RspCode":"00"}` and a new Sapo order; re-run to see `02`.
 - Full sandbox: see README "Test VNPAY Sandbox → Sapo".
