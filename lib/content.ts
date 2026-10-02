@@ -10,31 +10,49 @@ import { groqQuery } from "./sanity";
 import type { ContentBlock } from "./blocks";
 
 /**
- * How a block array is read, shared by product content and (from T2) blog post bodies so the two
- * cannot drift apart.
+ * The fields that turn an image reference into something the markup can use: a URL plus the alt
+ * text and the intrinsic size. Written once and spliced into every block that holds an image, so
+ * the shapes are provably identical and all of them match BlockImage in lib/blocks.ts.
+ *
+ * This is why the repo needs no @sanity/image-url: Sanity's CDN takes sizing as query parameters
+ * on the URL returned here, so components/blocks/imageUrl.ts is a pair of string helpers.
+ */
+const IMAGE_FIELDS = `
+  alt,
+  "url": asset->url,
+  "w": asset->metadata.dimensions.width,
+  "h": asset->metadata.dimensions.height
+`;
+
+/**
+ * How a block array is read, shared by product content and blog post bodies so the two cannot
+ * drift apart.
  *
  * The `...` spread carries every simple block through untouched, which is what makes a new block
- * type work without editing this string — BlockRenderer ignores a `_type` it does not know, so a
- * block added in the Studio before the code ships degrades to nothing rather than an error.
+ * type work without editing this string — `comparisonTable` holds no images and needs no branch
+ * of its own. BlockRenderer ignores a `_type` it does not know, so a block added in the Studio
+ * before the code ships degrades to nothing rather than an error.
  *
- * The two conditional overrides resolve image assets to URLs here, in the query. That is why this
- * repo needs no @sanity/image-url: Sanity's CDN takes sizing as query parameters on the returned
- * URL, so the components append `?w=…&q=…&auto=format` themselves. Intrinsic width and height
- * come along so the markup can reserve the box and avoid layout shift.
+ * The conditional overrides exist only to resolve image assets, and they resolve the *whole*
+ * image: an optional one projects to `null` when the editor left it empty, which the components
+ * test for by truthiness rather than against `undefined`.
  */
 export const BLOCKS_PROJECTION = `{
   ...,
   _type == "imageSlider" => {
-    "images": images[]{
-      alt,
-      caption,
-      "url": asset->url,
-      "w": asset->metadata.dimensions.width,
-      "h": asset->metadata.dimensions.height
-    }
+    "images": images[]{ ${IMAGE_FIELDS}, caption }
   },
   _type == "videoEmbed" => {
     "poster": poster.asset->url
+  },
+  _type == "logoRow" => {
+    "logos": logos[]{ ${IMAGE_FIELDS} }
+  },
+  _type == "steps" => {
+    "steps": steps[]{ title, body, "image": image{ ${IMAGE_FIELDS} } }
+  },
+  _type == "featureGrid" => {
+    "cards": cards[]{ title, body, "image": image{ ${IMAGE_FIELDS} } }
   }
 }`;
 

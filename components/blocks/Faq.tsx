@@ -7,11 +7,11 @@ import RichText from "./RichText";
  * expanded/collapsed state for screen readers for free, which a div-and-onClick version would
  * have to reimplement.
  */
-export default function Faq({ heading, items }: { heading?: string; items: FaqItem[] }) {
+export default function Faq({ heading, items }: { heading?: string | null; items: FaqItem[] }) {
   if (items.length === 0) return null;
   return (
     <section className="faq">
-      {heading !== undefined && <h2>{heading}</h2>}
+      {heading ? <h2>{heading}</h2> : null}
       {items.map((item, i) => (
         <details key={`${item.question}-${i}`} className="faq-item">
           <summary>{item.question}</summary>

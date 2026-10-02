@@ -12,9 +12,9 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 |---|---|---|---|
 | 1 | **T0** — Lớp design token | [T0-design-tokens.md](T0-design-tokens.md) | ✅ Xong — nhưng **mục màu sai**, T3.1 trích lại |
 | 2 | **T1** — Product description dạng component (Sanity) | [T1-product-content.md](T1-product-content.md) | ✅ Xong và đã verify trên dữ liệu thật |
-| 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ⬅️ **Tiếp theo** (đã viết lại 2026-10-01) |
+| 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ✅ Xong (commit `34c35c0`, `e5eeff1`) — mục "Storefront UI (T3)" trong `CLAUDE.md` |
 | 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | ✅ Xong, đang chạy trên production |
-| 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ⬅️ **Tiếp theo** |
+| 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ✅ Code xong (T4.1–T4.4, T4.6). **T4.5 chưa làm** — chờ chốt nội dung và ảnh |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
@@ -62,3 +62,12 @@ Luật này đã có trong repo (`htmlToText` ở `lib/sapo.ts` tước HTML c�
 1. Webhook `/api/revalidate` để Sanity publish là trang cập nhật ngay, thay vì chờ cache hết hạn.
 2. Variant picker (`CLAUDE.md` → Known MVP limitations: hiện mỗi sản phẩm chỉ lấy variant đầu theo `position`).
 3. Ảnh sản phẩm thật trên store Sapo (hiện chưa có nên tile hiện placeholder) — hoặc cho phép override ảnh sản phẩm từ Sanity.
+
+## Backup
+
+Hai thứ **không** nằm trong git và phải tự sao lưu:
+
+1. **Nội dung Sanity** — `npx sanity dataset export production backups/sanity-<ngày>.tar.gz`. Kéo luôn ảnh. `backups/` đã gitignore. Làm trước mỗi lần đổi schema hoặc nhập nội dung lớn.
+2. **`.env.local`** — sao thành `.env.backup.<ngày>.local` (khớp `.env*.local` nên cũng gitignore). **Đừng ghi đè bản cũ**: bản 2026-09-30 là nơi duy nhất còn `SAPO_VARIANT_ID`. Nguồn thật là Vercel (`vercel env pull`), nhưng Vercel CLI phải được cài trước.
+
+Code thì đã an toàn: mọi branch đều đã push lên `origin`, và deployment cũ trên Vercel vẫn rollback được.

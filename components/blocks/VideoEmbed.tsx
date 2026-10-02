@@ -30,7 +30,7 @@ export default function VideoEmbed({
   provider: VideoProvider;
   videoId: string;
   title: string;
-  poster?: string;
+  poster?: string | null;
 }) {
   const [playing, setPlaying] = useState(false);
 
@@ -53,10 +53,10 @@ export default function VideoEmbed({
   return (
     <div className="video">
       <button type="button" className="video-cover" onClick={() => setPlaying(true)}>
-        {poster !== undefined && (
+        {poster ? (
           // eslint-disable-next-line @next/next/no-img-element -- remote Sanity CDN, no loader configured
           <img src={sized(poster, 1024)} alt="" loading="lazy" />
-        )}
+        ) : null}
         <span className="video-play" aria-hidden="true">
           ▶
         </span>

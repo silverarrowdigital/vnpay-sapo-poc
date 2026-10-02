@@ -11,12 +11,12 @@ export default function Callout({
   body,
 }: {
   tone: "info" | "warn" | "success";
-  heading?: string;
+  heading?: string | null;
   body: string;
 }) {
   return (
     <aside className={`callout ${tone}`}>
-      {heading !== undefined && <p className="callout-heading">{heading}</p>}
+      {heading ? <p className="callout-heading">{heading}</p> : null}
       <p className="callout-body">{body}</p>
     </aside>
   );

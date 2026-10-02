@@ -1,9 +1,13 @@
 import type { ContentBlock } from "@/lib/blocks";
 import Callout from "./Callout";
+import ComparisonTable from "./ComparisonTable";
 import Faq from "./Faq";
+import FeatureGrid from "./FeatureGrid";
 import ImageSlider from "./ImageSlider";
+import LogoRow from "./LogoRow";
 import RichText from "./RichText";
 import Specs from "./Specs";
+import Steps from "./Steps";
 import VideoEmbed from "./VideoEmbed";
 
 /**
@@ -40,6 +44,21 @@ export default function BlockRenderer({ blocks }: { blocks: ContentBlock[] }) {
           case "callout":
             return (
               <Callout key={block._key} tone={block.tone} heading={block.heading} body={block.body} />
+            );
+          case "logoRow":
+            return <LogoRow key={block._key} heading={block.heading} logos={block.logos} />;
+          case "steps":
+            return <Steps key={block._key} heading={block.heading} steps={block.steps} />;
+          case "featureGrid":
+            return <FeatureGrid key={block._key} heading={block.heading} cards={block.cards} />;
+          case "comparisonTable":
+            return (
+              <ComparisonTable
+                key={block._key}
+                heading={block.heading}
+                columns={block.columns}
+                rows={block.rows}
+              />
             );
           default:
             return null;

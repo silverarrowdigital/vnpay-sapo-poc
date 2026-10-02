@@ -42,10 +42,54 @@ export type SliderAspect = "square" | "4-3" | "16-9";
  */
 export type VideoProvider = "youtube" | "vimeo";
 
+/**
+ * An image inside a block, already resolved to a URL by the GROQ projection — SliderImage without
+ * the caption.
+ *
+ * Optional images are typed `| null`, not merely optional, because `null` is what GROQ actually
+ * returns: projecting a field the editor left empty yields the key with a null value, not an
+ * absent key (verified against the live dataset). A `!== undefined` check would therefore read
+ * "no image" as "image present" and emit a broken `src`.
+ */
+export interface BlockImage {
+  url: string;
+  alt: string;
+  /** Intrinsic size, projected so the markup can reserve the box and avoid layout shift. */
+  w: number;
+  h: number;
+}
+
+export interface StepItem {
+  title: string;
+  body?: string | null;
+  image?: BlockImage | null;
+}
+
+export interface FeatureCard {
+  title: string;
+  body: string;
+  image?: BlockImage | null;
+}
+
+/**
+ * One row of a comparison table. `cells` is free text rather than a yes/no enum so a cell can hold
+ * "Có" as readily as "100%". Its length is advisory only: ComparisonTable pads a short row and
+ * ignores the overflow of a long one, because data an editor typed must never break the layout.
+ */
+export interface ComparisonRow {
+  label: string;
+  /**
+   * Optional *and* nullable: the `...` spread carries this row through untouched, so a row whose
+   * cells the editor never filled in arrives with no `cells` key at all rather than an empty
+   * array. Verified against the live dataset.
+   */
+  cells?: string[] | null;
+}
+
 export type ContentBlock =
   | { _type: "richText"; _key: string; content: PortableTextBlock[] }
   | { _type: "imageSlider"; _key: string; aspect: SliderAspect; images: SliderImage[] }
-  | { _type: "faq"; _key: string; heading?: string; items: FaqItem[] }
+  | { _type: "faq"; _key: string; heading?: string | null; items: FaqItem[] }
   | {
       _type: "videoEmbed";
       _key: string;
@@ -53,9 +97,27 @@ export type ContentBlock =
       videoId: string;
       /** Used as the iframe's accessible name, so it is required in the schema. */
       title: string;
-      poster?: string;
+      poster?: string | null;
     }
-  | { _type: "specs"; _key: string; heading?: string; rows: SpecRow[] }
-  | { _type: "callout"; _key: string; tone: "info" | "warn" | "success"; heading?: string; body: string };
+  | { _type: "specs"; _key: string; heading?: string | null; rows: SpecRow[] }
+  | {
+      _type: "callout";
+      _key: string;
+      tone: "info" | "warn" | "success";
+      heading?: string | null;
+      body: string;
+    }
+  /** A logo is the array member itself, so every entry has an image and an alt. */
+  | { _type: "logoRow"; _key: string; heading?: string | null; logos: BlockImage[] }
+  | { _type: "steps"; _key: string; heading?: string | null; steps: StepItem[] }
+  | { _type: "featureGrid"; _key: string; heading?: string | null; cards: FeatureCard[] }
+  | {
+      _type: "comparisonTable";
+      _key: string;
+      heading?: string | null;
+      /** The header row. Its first entry labels the row-label column. */
+      columns: string[];
+      rows: ComparisonRow[];
+    };
 
 export type { PortableTextBlock };

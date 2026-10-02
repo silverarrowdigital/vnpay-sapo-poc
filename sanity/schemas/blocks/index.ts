@@ -317,8 +317,239 @@ export const callout = defineType({
   },
 });
 
+/**
+ * Alt text for an image nested inside a block. Required everywhere in this repo: a logo or a
+ * feature illustration nobody can describe is invisible to a screen reader, and these blocks
+ * often carry the only picture on the page.
+ */
+const altField = defineField({
+  name: "alt",
+  title: "Mô tả ảnh (alt)",
+  type: "string",
+  validation: (Rule) => Rule.required().min(2).max(160),
+});
+
+export const logoRow = defineType({
+  name: "logoRow",
+  title: "Hàng logo",
+  type: "object",
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({
+      name: "logos",
+      title: "Logo",
+      type: "array",
+      validation: (Rule) => Rule.required().min(1).max(12),
+      of: [
+        defineArrayMember({
+          type: "image",
+          options: { hotspot: true },
+          fields: [altField],
+        }),
+      ],
+    }),
+  ],
+  preview: {
+    select: { heading: "heading", logos: "logos" },
+    prepare: ({ heading, logos }) => ({
+      title: heading || "Hàng logo",
+      subtitle: `${Array.isArray(logos) ? logos.length : 0} logo`,
+    }),
+  },
+});
+
+export const steps = defineType({
+  name: "steps",
+  title: "Các bước",
+  type: "object",
+  // There is deliberately no number field: Steps numbers the list from array order, so inserting
+  // a step in the middle does not mean renumbering every one after it by hand.
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({
+      name: "steps",
+      title: "Các bước",
+      description: "Số thứ tự tự đánh theo thứ tự trong danh sách, không nhập tay.",
+      type: "array",
+      validation: (Rule) => Rule.required().min(1),
+      of: [
+        defineArrayMember({
+          type: "object",
+          name: "stepItem",
+          fields: [
+            defineField({
+              name: "title",
+              title: "Tên bước",
+              type: "string",
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({ name: "body", title: "Diễn giải", type: "text", rows: 3 }),
+            defineField({
+              name: "image",
+              title: "Ảnh",
+              type: "image",
+              options: { hotspot: true },
+              fields: [altField],
+            }),
+          ],
+          preview: { select: { title: "title", subtitle: "body", media: "image" } },
+        }),
+      ],
+    }),
+  ],
+  preview: {
+    select: { heading: "heading", steps: "steps" },
+    prepare: ({ heading, steps: items }) => ({
+      title: heading || "Các bước",
+      subtitle: `${Array.isArray(items) ? items.length : 0} bước`,
+    }),
+  },
+});
+
+export const featureGrid = defineType({
+  name: "featureGrid",
+  title: "Dãy ô đặc điểm",
+  type: "object",
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({
+      name: "cards",
+      title: "Ô",
+      description: "Desktop xếp 3 ô một hàng, tablet 2, điện thoại 1.",
+      type: "array",
+      validation: (Rule) => Rule.required().min(1),
+      of: [
+        defineArrayMember({
+          type: "object",
+          name: "featureCard",
+          fields: [
+            defineField({
+              name: "image",
+              title: "Ảnh",
+              type: "image",
+              options: { hotspot: true },
+              fields: [altField],
+            }),
+            defineField({
+              name: "title",
+              title: "Tên",
+              type: "string",
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: "body",
+              title: "Mô tả",
+              type: "text",
+              rows: 3,
+              validation: (Rule) => Rule.required(),
+            }),
+          ],
+          preview: { select: { title: "title", subtitle: "body", media: "image" } },
+        }),
+      ],
+    }),
+  ],
+  preview: {
+    select: { heading: "heading", cards: "cards" },
+    prepare: ({ heading, cards }) => ({
+      title: heading || "Dãy ô đặc điểm",
+      subtitle: `${Array.isArray(cards) ? cards.length : 0} ô`,
+    }),
+  },
+});
+
+export const comparisonTable = defineType({
+  name: "comparisonTable",
+  title: "Bảng so sánh",
+  type: "object",
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({
+      name: "columns",
+      title: "Cột",
+      description: "Hàng tiêu đề. Ô đầu tiên là nhãn của cột nhãn bên trái.",
+      type: "array",
+      of: [defineArrayMember({ type: "string" })],
+      validation: (Rule) => Rule.required().min(2),
+    }),
+    defineField({
+      name: "rows",
+      title: "Hàng",
+      type: "array",
+      // A mismatched cell count is a *warning*, not an error: ComparisonTable pads a short row
+      // and drops the overflow of a long one, so the page survives either way. Blocking the save
+      // would only stop an editor halfway through typing a table.
+      validation: (Rule) => [
+        Rule.required().min(1),
+        Rule.custom((rows, context) => {
+          const columns = (context.parent as { columns?: unknown[] } | undefined)?.columns;
+          if (!Array.isArray(columns) || !Array.isArray(rows)) return true;
+          const expected = columns.length - 1;
+          const odd = rows
+            .map((row, i) => {
+              const cells = (row as { cells?: unknown[] } | null)?.cells;
+              const got = Array.isArray(cells) ? cells.length : 0;
+              return got === expected ? null : `hàng ${i + 1} có ${got} ô`;
+            })
+            .filter((message): message is string => message !== null);
+          if (odd.length === 0) return true;
+          return `Nên có ${expected} ô mỗi hàng (bằng số cột trừ cột nhãn): ${odd.join(", ")}.`;
+        }).warning(),
+      ],
+      of: [
+        defineArrayMember({
+          type: "object",
+          name: "comparisonRow",
+          fields: [
+            defineField({
+              name: "label",
+              title: "Nhãn hàng",
+              type: "string",
+              validation: (Rule) => Rule.required(),
+            }),
+            // Free text, not a yes/no enum, so a cell can hold "Có" as readily as "100%".
+            defineField({
+              name: "cells",
+              title: "Ô",
+              type: "array",
+              of: [defineArrayMember({ type: "string" })],
+            }),
+          ],
+          preview: {
+            select: { title: "label", cells: "cells" },
+            prepare: ({ title, cells }) => ({
+              title: title || "(chưa có nhãn)",
+              subtitle: Array.isArray(cells) ? cells.join(" · ") : "",
+            }),
+          },
+        }),
+      ],
+    }),
+  ],
+  preview: {
+    select: { heading: "heading", columns: "columns", rows: "rows" },
+    prepare: ({ heading, columns, rows }) => ({
+      title: heading || "Bảng so sánh",
+      subtitle: `${Array.isArray(columns) ? columns.length : 0} cột × ${
+        Array.isArray(rows) ? rows.length : 0
+      } hàng`,
+    }),
+  },
+});
+
 /** Every block object, registered once so both documents can reference them by name. */
-export const blockTypes = [richText, imageSlider, faq, videoEmbed, specs, callout];
+export const blockTypes = [
+  richText,
+  imageSlider,
+  faq,
+  videoEmbed,
+  specs,
+  callout,
+  logoRow,
+  steps,
+  featureGrid,
+  comparisonTable,
+];
 
 /**
  * The composable content array. Shared so a product description and a blog post offer the editor

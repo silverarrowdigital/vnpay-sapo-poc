@@ -20,3 +20,7 @@ dist/
 
 # Sanity CLI generated studio runtime entrypoint
 .sanity/
+
+# Bản export dataset Sanity (sanity dataset export). Chứa nội dung + ảnh thật,
+# không vào repo; xem docs/plan/README.md phần backup.
+backups/
