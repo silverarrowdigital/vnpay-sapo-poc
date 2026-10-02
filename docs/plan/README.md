@@ -14,7 +14,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 2 | **T1** — Product description dạng component (Sanity) | [T1-product-content.md](T1-product-content.md) | ✅ Xong và đã verify trên dữ liệu thật |
 | 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ✅ Xong (commit `34c35c0`, `e5eeff1`) — mục "Storefront UI (T3)" trong `CLAUDE.md` |
 | 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | ✅ Xong, đang chạy trên production |
-| 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ✅ Code xong (T4.1–T4.4, T4.6). **T4.5 chưa làm** — chờ chốt nội dung và ảnh |
+| 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ✅ Xong. `logoRow` bị bỏ theo quyết định 2026-10-02; `steps` chưa có ảnh (xem ghi chú dưới) |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
@@ -62,6 +62,16 @@ Luật này đã có trong repo (`htmlToText` ở `lib/sapo.ts` tước HTML c�
 1. ~~Webhook `/api/revalidate` để Sanity publish là trang cập nhật ngay~~ — xong. Hook `SAPO VNPAY POC` đã trỏ vào `https://vnpay-sapo-poc.vercel.app/api/revalidate`, secret đã có trên Vercel; kiểm bằng `npm run check:revalidate -- <url>`.
 2. Variant picker (`CLAUDE.md` → Known MVP limitations: hiện mỗi sản phẩm chỉ lấy variant đầu theo `position`).
 3. Ảnh sản phẩm thật trên store Sapo (hiện chưa có nên tile hiện placeholder) — hoặc cho phép override ảnh sản phẩm từ Sanity.
+
+## T4.5 — những chỗ lệch so với kế hoạch
+
+Nội dung Test Product 1 đã nhập (`productContent-92442610`, 5 khối: steps → faq mô tả → featureGrid → comparisonTable → faq). Ba điểm khác kế hoạch, đều do dữ liệu chứ không phải code:
+
+1. **`logoRow` bị bỏ.** Trang sản phẩm của reference chỉ có hàng logo cổng thanh toán, thứ `CLAUDE.md` đã quyết không dựng (asset bên thứ ba, dự án này chỉ nhận VNPAY).
+2. **`steps` không có ảnh.** Toàn bộ `design/reference/` không có tấm ảnh pha trà nào — bài blog chỉ có screenshot và ảnh chiến dịch. Gán packshot hộp trà cho "Tráng trà nhanh" thì `alt` sẽ phải mô tả sai, nên để trống. Field vẫn còn, thêm ảnh trong Studio là hiện ngay.
+3. **Câu trả lời FAQ là bản nháp tự soạn.** Reference có 5 câu hỏi nhưng câu trả lời do JS tải nên bản lưu không có. Năm câu trả lời hiện tại viết để sửa lại trong Studio.
+
+Khối slider ảnh cũ của T1 đã bị bỏ: ảnh trong đó là ảnh thử, `alt` còn ghi "màu nhấn #BF4800" — bảng màu mà T3 đã bác bỏ.
 
 ## Backup
 
