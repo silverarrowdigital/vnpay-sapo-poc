@@ -15,6 +15,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ✅ Xong (commit `34c35c0`, `e5eeff1`) — mục "Storefront UI (T3)" trong `CLAUDE.md` |
 | 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | ✅ Xong, đang chạy trên production |
 | 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ✅ Xong. `logoRow` bị bỏ theo quyết định 2026-10-02; `steps` chưa có ảnh (xem ghi chú dưới) |
+| 6 | **T5** — Dựng lại trang sản phẩm theo drinkmarna.com | [T5-product-page-marna.md](T5-product-page-marna.md) | ⬅️ **Tiếp theo** — chặn ở **T5.0** (chốt nội dung không chép được) và ảnh |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
