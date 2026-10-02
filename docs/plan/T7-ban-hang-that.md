@@ -78,9 +78,25 @@ Thứ tự đặt theo một nguyên tắc: **số tiền phải đúng trước
 
 ### T7.0 — Bật quyền cho Private App *(việc của bạn, chặn T7.2 và T7.3)*
 
-Vào Sapo → ứng dụng riêng → thêm quyền đọc cho **Khuyến mãi/Giảm giá** và **Vận chuyển**. Hiện cả hai đều `access_denied`.
+Đường đi lấy từ tài liệu chính thức https://support.sapo.vn/ung-dung-rieng-private-apps, không phải đoán:
 
-**Nghiệm thu**: `/admin/discounts.json` và `/admin/shipping_zones.json` trả `200`. Tôi có sẵn script dò để chạy lại.
+1. Trang quản trị Sapo → menu trái → **Ứng dụng**
+2. Cuộn xuống dòng *"Bạn đang làm việc với nhà phát triển?"* → nhấp **Ứng dụng riêng**
+3. Chọn ứng dụng đang dùng trong danh sách → mở trang chi tiết
+4. Sửa cột quyền, rồi **Lưu**
+
+Mỗi nhóm có ba mức: *Không cho phép* · *Chỉ đọc* · *Đọc và ghi*.
+
+| Nhóm quyền | Đặt thành | Vì sao |
+|---|---|---|
+| **Khuyến mãi** | **Chỉ đọc** | Ta chỉ *kiểm tra* mã khách nhập, không bao giờ tạo hay sửa khuyến mãi. Cho quyền ghi là mở rộng thiệt hại nếu khoá bị lộ, mà không dùng đến |
+| **Đơn hàng, giao dịch và vận chuyển** | giữ **Đọc và ghi** | Đã bật sẵn — ứng dụng đang tạo đơn được |
+
+**API key và API secret KHÔNG đổi khi sửa quyền** (tài liệu Sapo nói rõ). Nghĩa là không phải sửa `.env.local`, không phải đổi biến trên Vercel, không phải deploy lại.
+
+**Một điều chưa chắc, nói trước:** `discounts.json` và `price_rules.json` gần như chắc thuộc nhóm *Khuyến mãi* — bật là xong. Nhưng `shipping_zones.json` cũng trả `access_denied` **dù ứng dụng đã có quyền đơn hàng + vận chuyển**, nên nó có thể không nằm trong nhóm nào mà ứng dụng riêng với tới được. Nếu bật xong mà nó vẫn `403` thì đó không phải lỗi cấu hình, và T7.2 sẽ đi đường bảng phí phẳng thay vì đọc vùng vận chuyển từ Sapo.
+
+**Nghiệm thu**: chạy lại script dò. `discounts.json` phải trả `200`. Kết quả của `shipping_zones.json` quyết định T7.2 đi hướng nào.
 
 ### T7.1 — Địa chỉ giao hàng đúng chuẩn Việt Nam
 
