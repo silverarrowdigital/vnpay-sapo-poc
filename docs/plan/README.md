@@ -59,7 +59,7 @@ Luật này đã có trong repo (`htmlToText` ở `lib/sapo.ts` tước HTML c�
 
 ## Việc còn lại sau 3 task này (không nằm trong hôm nay)
 
-1. Webhook `/api/revalidate` để Sanity publish là trang cập nhật ngay, thay vì chờ cache hết hạn.
+1. ~~Webhook `/api/revalidate` để Sanity publish là trang cập nhật ngay~~ — xong. Hook `SAPO VNPAY POC` đã trỏ vào `https://vnpay-sapo-poc.vercel.app/api/revalidate`, secret đã có trên Vercel; kiểm bằng `npm run check:revalidate -- <url>`.
 2. Variant picker (`CLAUDE.md` → Known MVP limitations: hiện mỗi sản phẩm chỉ lấy variant đầu theo `position`).
 3. Ảnh sản phẩm thật trên store Sapo (hiện chưa có nên tile hiện placeholder) — hoặc cho phép override ảnh sản phẩm từ Sanity.
 
