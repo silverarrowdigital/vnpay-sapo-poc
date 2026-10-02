@@ -15,7 +15,8 @@
     "watch:ipn": "node scripts/auto-ipn.mjs --watch",
     "fetch:reference": "node scripts/fetch-reference.mjs",
     "studio:dev": "sanity dev",
-    "studio:deploy": "sanity deploy"
+    "studio:deploy": "sanity deploy",
+    "check:revalidate": "node --env-file=.env.local scripts/check-revalidate.mjs"
   },
   "dependencies": {
     "@portabletext/react": "^8.0.1",
