@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import AddToCartForm from "@/components/AddToCartForm";
 import BlockRenderer from "@/components/blocks/BlockRenderer";
 import { getProductByHandle } from "@/lib/catalog";
-import { getProductContent } from "@/lib/content";
+import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
 import { formatVnd, isSoldOut, maxOrderableQuantity } from "@/lib/product";
 
@@ -41,6 +41,34 @@ const cachedProductContent = unstable_cache(
   ["product-content"],
   { revalidate: 300, tags: ["product-content"] },
 );
+
+/**
+ * The short facts beside the price. Local to this page rather than a block, because the buy box
+ * draws these rows in this order and nowhere else — a block would be draggable to the bottom of
+ * the description, where it means nothing.
+ *
+ * A row whose value is missing is dropped entirely. Rendering the label with nothing after it
+ * would read, to a screen reader, as a term with no definition.
+ */
+function MetaRows({ meta }: { meta: ProductMeta | null }) {
+  if (meta === null) return null;
+  const rows: Array<[string, string]> = [];
+  if (meta.teaType) rows.push(["Loại trà", meta.teaType]);
+  if (meta.caffeine) rows.push(["Caffeine", meta.caffeine]);
+  if (meta.tastingNotes) rows.push(["Hương vị", meta.tastingNotes]);
+  if (meta.perfectFor) rows.push(["Hợp với", meta.perfectFor]);
+  if (rows.length === 0) return null;
+  return (
+    <dl className="mb-6 grid gap-3 border-t border-line pt-4">
+      {rows.map(([label, value]) => (
+        <div key={label} className="grid gap-1 sm:grid-cols-[8rem_1fr] sm:gap-4">
+          <dt className="m-0 text-[11px] tracking-widest text-ink-soft uppercase">{label}</dt>
+          <dd className="m-0 text-sm">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 type Params = Promise<{ handle: string }>;
 
@@ -81,15 +109,17 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
   // so the failure is never recorded as an answer. The page falls back to Sapo's own
   // description below, and the next request asks Sanity again rather than inheriting a
   // five-minute hole.
-  let blocks: Awaited<ReturnType<typeof cachedProductContent>> = null;
+  let content: Awaited<ReturnType<typeof cachedProductContent>> = null;
   try {
-    blocks = await cachedProductContent(product.productId);
+    content = await cachedProductContent(product.productId);
   } catch (err) {
     log.warn("product_content.unavailable", {
       productId: product.productId,
       error: errorMessage(err),
     });
   }
+  const meta = content?.meta ?? null;
+  const blocks = content?.blocks ?? [];
 
   return (
     <div className="mx-auto w-full max-w-[1416px] px-4">
@@ -127,6 +157,31 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
             {product.name}
           </h1>
 
+          {meta?.servings ? (
+            <p className="m-0 -mt-4 mb-4 text-sm text-ink-soft">{meta.servings}</p>
+          ) : null}
+          {meta?.summary ? (
+            <p className="m-0 mb-6 max-w-[55ch] text-sm leading-relaxed">{meta.summary}</p>
+          ) : null}
+
+          <MetaRows meta={meta} />
+
+          {meta?.benefits && meta.benefits.length > 0 ? (
+            <div className="mb-6">
+              <p className="m-0 mb-2 text-[11px] tracking-widest text-ink-soft uppercase">Lợi ích</p>
+              <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+                {meta.benefits.map((b, i) => (
+                  <li
+                    key={`${b}-${i}`}
+                    className="rounded-full bg-primary px-3 py-1 text-[11px] tracking-wide text-primary-fg uppercase"
+                  >
+                    {b}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <p className="m-0 font-mono text-xl">
             {formatVnd(product.priceVnd)}
             {product.compareAtPriceVnd !== undefined && (
@@ -156,7 +211,7 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
         {/* Sapo's description is HTML; it is stripped to text server-side rather than rendered, so
             nothing a product's content contains can execute on this page. Shown only when the CMS
             has nothing for this product — blocks supersede it. */}
-        {blocks !== null ? (
+        {blocks.length > 0 ? (
           <BlockRenderer blocks={blocks} />
         ) : product.description ? (
           <p className="max-w-[65ch] text-sm leading-relaxed">{product.description}</p>

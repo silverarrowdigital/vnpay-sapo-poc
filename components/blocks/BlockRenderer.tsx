@@ -1,9 +1,11 @@
 import type { ContentBlock } from "@/lib/blocks";
+import BrewProfile from "./BrewProfile";
 import Callout from "./Callout";
 import ComparisonTable from "./ComparisonTable";
 import Faq from "./Faq";
 import FeatureGrid from "./FeatureGrid";
 import ImageSlider from "./ImageSlider";
+import IngredientCards from "./IngredientCards";
 import LogoRow from "./LogoRow";
 import RichText from "./RichText";
 import Specs from "./Specs";
@@ -58,6 +60,27 @@ export default function BlockRenderer({ blocks }: { blocks: ContentBlock[] }) {
                 heading={block.heading}
                 columns={block.columns}
                 rows={block.rows}
+              />
+            );
+          case "brewProfile":
+            return (
+              <BrewProfile
+                key={block._key}
+                heading={block.heading}
+                rows={block.rows}
+                scaleMin={block.scaleMin}
+                scaleMax={block.scaleMax}
+                scaleValue={block.scaleValue}
+                scaleNote={block.scaleNote}
+              />
+            );
+          case "ingredientCards":
+            return (
+              <IngredientCards
+                key={block._key}
+                heading={block.heading}
+                intro={block.intro}
+                cards={block.cards}
               />
             );
           default:

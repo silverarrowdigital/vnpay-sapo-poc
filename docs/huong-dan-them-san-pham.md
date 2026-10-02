@@ -82,15 +82,34 @@ Mở: **https://vnpay-sapo-poc.sanity.studio/**
 
 5. Kéo xuống phần **Khối nội dung** và sửa chữ trong 5 khối cho đúng sản phẩm mới.
 
-### Năm khối trong khung, theo đúng thứ tự
+### Trước khi xuống phần khối: điền ô **Thông tin trong khung mua**
+
+Đây là phần hiện ngay cạnh giá. Để trống ô nào thì dòng đó không hiện, không sao cả.
+
+| Ô | Ví dụ |
+|---|---|
+| Quy cách | `15+ lần pha / 50g` |
+| Mô tả một dòng | `Hồng trà Ceylon lá rời cao cấp…` |
+| Loại trà | `Hồng trà` |
+| Mức caffeine | chọn Không có / Thấp / Vừa / Cao |
+| Hương vị cảm nhận | `Sô-cô-la, Ca-cao, Bánh quy` |
+| Hợp với | câu ngắn mô tả dịp uống |
+| Huy hiệu lợi ích | tối đa 4, chữ ngắn viết hoa |
+
+### Mười khối trong khung, theo đúng thứ tự
 
 | Thứ tự | Tên khối trong Studio | Dùng để |
 |---|---|---|
-| 1 | **Các bước** | Hướng dẫn pha, 5 bước. Số thứ tự **tự đánh**, bạn không phải nhập. |
-| 2 | **Câu hỏi thường gặp** (tiêu đề: Mô tả sản phẩm) | Hương vị · Thành phần · Pha trà · Bảo quản |
-| 3 | **Dãy ô đặc điểm** | 3 ô, mỗi ô một ảnh + tên + mô tả ngắn |
-| 4 | **Bảng so sánh** (tiêu đề: Gợi ý pha) | Bảng 2 cột: lượng trà, nhiệt độ, thời gian hãm… |
-| 5 | **Câu hỏi thường gặp** | 5 câu hỏi của khách và câu trả lời |
+| 1 | **Văn bản** | Đoạn mở đầu + 3 gạch đầu dòng lợi ích |
+| 2 | **Câu hỏi thường gặp** | Thành phần · Chất lượng · Vận chuyển |
+| 3 | **Slider ảnh** | Bộ ảnh sản phẩm |
+| 4 | **Hàng logo** | Nơi đã nhắc đến sản phẩm |
+| 5 | **Hướng dẫn pha** | Lượng trà, nhiệt độ, thời gian + thang nhẹ↔đậm |
+| 6 | **Văn bản** | Hợp với bạn nếu — các gạch đầu dòng |
+| 7 | **Văn bản** | Trải nghiệm — một đoạn |
+| 8 | **Thẻ nguyên liệu** | Mỗi nguyên liệu một thẻ kèm dãy nhãn |
+| 9 | **Bảng so sánh** | Trà lá rời so với trà túi lọc |
+| 10 | **Câu hỏi thường gặp** | Câu hỏi của khách và câu trả lời |
 
 Bạn được phép **xoá bớt, thêm, hoặc kéo đổi thứ tự** các khối tuỳ ý. Kéo bằng chấu bên trái
 mỗi khối.

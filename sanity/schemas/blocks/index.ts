@@ -537,6 +537,116 @@ export const comparisonTable = defineType({
   },
 });
 
+export const brewProfile = defineType({
+  name: "brewProfile",
+  title: "Hướng dẫn pha",
+  type: "object",
+  // Bảng thông số và thang hương vị nằm chung một khối vì trang tham chiếu vẽ chúng thành một
+  // mảng. Tách đôi thì người biên tập phải nhớ luôn đặt hai khối cạnh nhau — một luật ngầm
+  // không ai thấy cho tới khi nó bị phá.
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({
+      name: "rows",
+      title: "Thông số",
+      type: "array",
+      validation: (Rule) => Rule.required().min(1).max(6),
+      of: [
+        defineArrayMember({
+          type: "object",
+          name: "brewRow",
+          fields: [
+            defineField({ name: "label", title: "Tên", type: "string", validation: (Rule) => Rule.required() }),
+            defineField({ name: "value", title: "Giá trị", type: "string", validation: (Rule) => Rule.required() }),
+          ],
+          preview: { select: { title: "label", subtitle: "value" } },
+        }),
+      ],
+    }),
+    defineField({
+      name: "scaleMin",
+      title: "Đầu nhẹ của thang",
+      type: "string",
+      initialValue: "Thanh nhẹ",
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "scaleMax",
+      title: "Đầu đậm của thang",
+      type: "string",
+      initialValue: "Đậm",
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "scaleValue",
+      title: "Vị trí trên thang (0–100)",
+      description: "0 là nhẹ nhất, 100 là đậm nhất.",
+      type: "number",
+      initialValue: 50,
+      validation: (Rule) => Rule.required().min(0).max(100),
+    }),
+    defineField({ name: "scaleNote", title: "Ghi chú dưới thang", type: "text", rows: 2 }),
+  ],
+  preview: {
+    select: { heading: "heading", rows: "rows", v: "scaleValue" },
+    prepare: ({ heading, rows, v }) => ({
+      title: heading || "Hướng dẫn pha",
+      subtitle: `${Array.isArray(rows) ? rows.length : 0} thông số · thang ${v ?? "?"}/100`,
+    }),
+  },
+});
+
+export const ingredientCards = defineType({
+  name: "ingredientCards",
+  title: "Thẻ nguyên liệu",
+  type: "object",
+  // Khác featureGrid ở chỗ thân thẻ là một *dãy nhãn*, không phải một đoạn văn. Dùng featureGrid
+  // rồi nhét nhãn vào ô mô tả sẽ mất cấu trúc danh sách, và trình đọc màn hình đọc ra một câu dài.
+  fields: [
+    defineField({ name: "heading", title: "Tiêu đề khối", type: "string" }),
+    defineField({ name: "intro", title: "Đoạn mở đầu", type: "text", rows: 3 }),
+    defineField({
+      name: "cards",
+      title: "Thẻ",
+      type: "array",
+      validation: (Rule) => Rule.required().min(1),
+      of: [
+        defineArrayMember({
+          type: "object",
+          name: "ingredientCard",
+          fields: [
+            defineField({ name: "name", title: "Tên nguyên liệu", type: "string", validation: (Rule) => Rule.required() }),
+            defineField({ name: "image", title: "Ảnh", type: "image", options: { hotspot: true }, fields: [altField] }),
+            defineField({
+              name: "tags",
+              title: "Nhãn",
+              description: "Mỗi nhãn một dòng, ví dụ: Polyphenol, Chống oxy hoá.",
+              type: "array",
+              of: [defineArrayMember({ type: "string" })],
+              validation: (Rule) => Rule.required().min(1).max(8),
+            }),
+          ],
+          preview: {
+            select: { title: "name", tags: "tags", media: "image" },
+            prepare: ({ title, tags, media }) => ({
+              title: title || "(chưa có tên)",
+              subtitle: Array.isArray(tags) ? tags.join(" · ") : "",
+              media,
+            }),
+          },
+        }),
+      ],
+    }),
+  ],
+  preview: {
+    select: { heading: "heading", cards: "cards" },
+    prepare: ({ heading, cards }) => ({
+      title: heading || "Thẻ nguyên liệu",
+      subtitle: `${Array.isArray(cards) ? cards.length : 0} thẻ`,
+    }),
+  },
+});
+
 /** Every block object, registered once so both documents can reference them by name. */
 export const blockTypes = [
   richText,
@@ -549,6 +659,8 @@ export const blockTypes = [
   steps,
   featureGrid,
   comparisonTable,
+  brewProfile,
+  ingredientCards,
 ];
 
 /**

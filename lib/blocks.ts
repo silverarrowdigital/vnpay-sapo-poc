@@ -86,6 +86,22 @@ export interface ComparisonRow {
   cells?: string[] | null;
 }
 
+/** One line of the brewing table: how much, how hot, how long. */
+export interface BrewRow {
+  label: string;
+  value: string;
+}
+
+/**
+ * One ingredient and what it brings. `tags` is a list rather than a sentence so the markup can
+ * stay a list — flattening it into prose is what loses the structure for a screen reader.
+ */
+export interface IngredientCard {
+  name: string;
+  image?: BlockImage | null;
+  tags?: string[] | null;
+}
+
 export type ContentBlock =
   | { _type: "richText"; _key: string; content: PortableTextBlock[] }
   | { _type: "imageSlider"; _key: string; aspect: SliderAspect; images: SliderImage[] }
@@ -118,6 +134,25 @@ export type ContentBlock =
       /** The header row. Its first entry labels the row-label column. */
       columns: string[];
       rows: ComparisonRow[];
+    }
+  | {
+      _type: "brewProfile";
+      _key: string;
+      heading?: string | null;
+      rows: BrewRow[];
+      /** Ends of the flavour axis, e.g. nhẹ ↔ đậm. */
+      scaleMin: string;
+      scaleMax: string;
+      /** 0–100 along that axis. */
+      scaleValue: number;
+      scaleNote?: string | null;
+    }
+  | {
+      _type: "ingredientCards";
+      _key: string;
+      heading?: string | null;
+      intro?: string | null;
+      cards: IngredientCard[];
     };
 
 export type { PortableTextBlock };
