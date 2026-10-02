@@ -65,11 +65,13 @@ Luật này đã có trong repo (`htmlToText` ở `lib/sapo.ts` tước HTML c�
 
 ## T4.5 — những chỗ lệch so với kế hoạch
 
-Nội dung Test Product 1 đã nhập (`productContent-92442610`, 5 khối: steps → faq mô tả → featureGrid → comparisonTable → faq). Ba điểm khác kế hoạch, đều do dữ liệu chứ không phải code:
+Khung nội dung product details gồm 5 khối — steps → faq mô tả → featureGrid → comparisonTable → faq — và **cả bốn sản phẩm Sapo đều dùng chung khung này** (`productContent-<sapoProductId>`, sinh từ một định nghĩa duy nhất rồi đối chiếu từng khối để chắc chắn không lệch). Ba điểm khác kế hoạch, đều do dữ liệu chứ không phải code:
 
 1. **`logoRow` bị bỏ.** Trang sản phẩm của reference chỉ có hàng logo cổng thanh toán, thứ `CLAUDE.md` đã quyết không dựng (asset bên thứ ba, dự án này chỉ nhận VNPAY).
 2. **`steps` không có ảnh.** Toàn bộ `design/reference/` không có tấm ảnh pha trà nào — bài blog chỉ có screenshot và ảnh chiến dịch. Gán packshot hộp trà cho "Tráng trà nhanh" thì `alt` sẽ phải mô tả sai, nên để trống. Field vẫn còn, thêm ảnh trong Studio là hiện ngay.
 3. **Câu trả lời FAQ là bản nháp tự soạn.** Reference có 5 câu hỏi nhưng câu trả lời do JS tải nên bản lưu không có. Năm câu trả lời hiện tại viết để sửa lại trong Studio.
+
+**Bốn trang hiện có nội dung chữ giống hệt nhau.** Đúng với ý "khung nội dung", nhưng khi có sản phẩm thật thì phần mô tả, FAQ và dãy ô cần viết riêng cho từng loại trà — bốn trang trùng chữ là nội dung trùng lặp với công cụ tìm kiếm, và `app/sitemap.ts` có khai báo cả bốn. Sửa trong Studio, mỗi document một sản phẩm.
 
 Khối slider ảnh cũ của T1 đã bị bỏ: ảnh trong đó là ảnh thử, `alt` còn ghi "màu nhấn #BF4800" — bảng màu mà T3 đã bác bỏ.
 
