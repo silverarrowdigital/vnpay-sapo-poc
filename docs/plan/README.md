@@ -15,7 +15,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 3 | **T3** — Sao chép giao diện từ design ref | [T3-ui-redesign.md](T3-ui-redesign.md) | ✅ Xong (commit `34c35c0`, `e5eeff1`) — mục "Storefront UI (T3)" trong `CLAUDE.md` |
 | 4 | **T2** — Blog (Sanity) | [T2-blog.md](T2-blog.md) | ✅ Xong, đang chạy trên production |
 | 5 | **T4** — Khối nội dung trang sản phẩm | [T4-product-content-blocks.md](T4-product-content-blocks.md) | ✅ Xong. `logoRow` bị bỏ theo quyết định 2026-10-02; `steps` chưa có ảnh (xem ghi chú dưới) |
-| 6 | **T5** — Dựng lại trang sản phẩm theo drinkmarna.com | [T5-product-page-marna.md](T5-product-page-marna.md) | ✅ Xong cho 4 Test Product. **Ảnh là ảnh tạm**; `hong-tra-shan-tuyet-60g` giữ nguyên khung T4 chờ chủ cửa hàng quyết |
+| 6 | **T5** — Dựng lại trang sản phẩm theo drinkmarna.com | [T5-product-page-marna.md](T5-product-page-marna.md) | ✅ Xong, áp cho **cả 5 sản phẩm**. **Ảnh vẫn là ảnh tạm** và 7 câu về doanh nghiệp còn chờ thông tin thật — xem ghi chú dưới |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
@@ -75,6 +75,17 @@ Khung nội dung product details gồm 5 khối — steps → faq mô tả → f
 **Bốn trang hiện có nội dung chữ giống hệt nhau.** Đúng với ý "khung nội dung", nhưng khi có sản phẩm thật thì phần mô tả, FAQ và dãy ô cần viết riêng cho từng loại trà — bốn trang trùng chữ là nội dung trùng lặp với công cụ tìm kiếm, và `app/sitemap.ts` có khai báo cả bốn. Sửa trong Studio, mỗi document một sản phẩm.
 
 Khối slider ảnh cũ của T1 đã bị bỏ: ảnh trong đó là ảnh thử, `alt` còn ghi "màu nhấn #BF4800" — bảng màu mà T3 đã bác bỏ.
+
+## T5 — việc còn lại sau khi áp khung
+
+Khung T5 đã áp cho cả 5 sản phẩm Sapo đang hoạt động, sinh từ **một định nghĩa duy nhất** rồi đối chiếu từng khối (bỏ `_key`, chuẩn hoá thứ tự key) nên năm trang không thể lệch nhau.
+
+**Dùng lại `_id` đang có, không đặt theo quy ước.** `hong-tra-shan-tuyet-60g` được tạo từ Studio nên `_id` là UUID (`7e48fe61-…`), không phải `productContent-92784200`. Tạo mới theo quy ước sẽ cho **hai document cùng một sản phẩm**, mà kiểm tra trùng chỉ chạy lúc sửa trong Studio chứ không cứu được lúc đọc — truy vấn `[0]` sẽ lấy bừa một cái. Script nhân khung vì vậy đọc `_id` hiện có trước khi ghi.
+
+Hai thứ còn chờ chủ cửa hàng:
+
+1. **Bảy câu là phát biểu về doanh nghiệp Marna** (đối tác bán lẻ, kho ở Anh và lời hứa 24–48 giờ, giá bảng Anh, email hỗ trợ, gói đăng ký, con số vi nhựa có dẫn nguồn). Đã viết lại trung tính thay vì dịch nguyên văn, vì dịch nguyên văn là nói sai sự thật về cửa hàng này. Sửa trong Studio, không cần deploy.
+2. **Ảnh đang là ảnh tạm** — `imageSlider`, `logoRow` và `ingredientCards` đều dùng lại ba packshot của T4.5. Riêng hàng logo *ĐƯỢC NHẮC ĐẾN TẠI* đang là ảnh hộp trà chứ không phải logo.
 
 ## Backup
 
