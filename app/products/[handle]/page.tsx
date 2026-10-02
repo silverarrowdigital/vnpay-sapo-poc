@@ -193,7 +193,7 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
           <p className="mt-2 text-xs text-ink-soft">Phí vận chuyển được tính khi thanh toán.</p>
 
           {product.stock !== null && (
-            <p className={`mt-4 font-mono text-xs ${soldOut ? "text-[color:var(--err)]" : "text-primary"}`}>
+            <p className={`mt-4 font-mono text-xs ${soldOut ? "text-[color:var(--err)]" : "text-[color:var(--ok)]"}`}>
               {soldOut ? "Hết hàng" : `Còn ${product.stock} ${product.unit ?? ""}`.trim()}
             </p>
           )}

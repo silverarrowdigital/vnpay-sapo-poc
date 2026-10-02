@@ -1,5 +1,10 @@
 # Design token trích từ thehourtea.com
 
+> **Đã bị thay thế ở phần MÀU và FONT (T6, 2026-10-02).** Lớp token đang chạy lấy từ
+> `design/the-hour-tea-nextjs-design.md` — nguồn Figma, có tên biến hẳn hoi — chứ không phải
+> từ đo ảnh chụp trang thật. Tài liệu này giữ lại vì nó ghi cách lớp cũ được suy ra và vì phần
+> hình học lưới vẫn còn dùng. Chỗ nào hai bên mâu thuẫn thì design doc thắng.
+
 Bản kiểm kê cho [T0.2](../docs/plan/T0-design-tokens.md). Mọi giá trị đều có nguồn để bạn kiểm lại.
 
 - Trích ngày: **2026-10-01**

@@ -40,7 +40,7 @@ export default function Steps({
             <div className="flex items-baseline gap-3">
               <span
                 aria-hidden="true"
-                className="font-mono text-sm text-primary"
+                className="font-mono text-sm text-ink-soft"
               >
                 {String(i + 1).padStart(2, "0")}
               </span>

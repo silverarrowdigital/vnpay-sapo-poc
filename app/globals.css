@@ -35,33 +35,40 @@
    càng cao càng chắc chắn là màu nền chứ không phải nội dung.
    =========================================================================== */
 @theme {
-  --color-page: #e7dacc; /* nền toàn trang (100% vùng, khớp ở cả 2 trang) */
-  --color-banner: #edd2b9; /* thanh thông báo trên cùng (95%) */
-  --color-cream: #f4ebe1; /* dải section sáng hơn (100%) */
-  --color-card: #f1f0ed; /* nền thẻ feature, ngả lạnh (66%) */
-  --color-ink: #141414; /* chữ chính */
-  --color-ink-soft: #14141499; /* chữ phụ — alpha 60%, đạt 4.81:1 trên nền be */
-  --color-line: #14141426; /* viền — alpha 15% */
-  --color-primary: #357a38; /* nút chính "MUA NGAY" (95%) */
-  --color-primary-fg: #ffffff;
+  --color-page: #f3f0ec; /* sp-cream — nền chính, section sáng, capsule điều hướng */
+  --color-banner: #0b1012; /* doc không có token riêng cho dải này; dùng mực theo mô tả
+     "dark editorial strip". Trắng trên nền kem gần trắng thì dải biến mất. */
+  --color-cream: #ffffff; /* ab-white — mặt sáng phụ trợ */
+  --color-card: #ffffff; /* ab-white */
+  --color-ink: #0b1012; /* sp-ink — chữ chính, dải editorial tối, footer */
+  --color-ink-soft: #0b101299; /* chữ phụ — alpha 60% của mực. Trộn ra #686a69, đạt 4.80:1
+     trên nền giấy và 5.45:1 trên trắng. Giữ 60% như trước: nền đổi nhưng alpha này vẫn đủ. */
+  --color-line: #0b101238; /* divider — alpha 22% đúng như doc */
+  --color-primary: #f1a400; /* sp-light — hành động chính, filter đang chọn, nút nhận tin */
+  /* Mực, KHÔNG phải trắng. Trắng trên hổ phách chỉ đạt 2.09:1 — trượt WCAG AA rất xa và
+     mọi nút trong dự án đều dùng cặp bg-primary + text-primary-fg, nên để trắng là làm
+     hỏng chữ trên từng nút một. Mực trên hổ phách đạt 9.16:1. */
+  --color-primary-fg: #0b1012;
 
   /* Hình học lưới sản phẩm, đo bằng cách dò biên tile trên ảnh ref
      (scratchpad/layout.mjs): 3 cột rộng 328px, khe 16px. */
   --spacing-tile: 328px;
   --container-shop: 1016px; /* 3*328 + 2*16 */
 
-  --font-display: var(--font-brand-serif), Georgia, "Times New Roman", serif;
-  --font-body: var(--font-jakarta), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-brand-mono), ui-monospace, "Cascadia Mono", monospace;
+  /* Một kiểu chữ cho toàn bộ giao diện. Ba tên biến được giữ lại để component không phải
+     sửa, nhưng cả ba cùng trỏ về Manrope — đúng như design doc mô tả. */
+  --font-display: var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-manrope), ui-monospace, "Cascadia Mono", monospace;
 }
 
 :root {
   /* --- Font ---------------------------------------------------------------
      --font-jakarta / --font-brand-* do next/font gán trong app/layout.tsx.
      Fallback giữ trang đọc được nếu một file font không tải được. */
-  --font-body: var(--font-jakarta), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-display: var(--font-brand-serif), Georgia, "Times New Roman", serif;
-  --font-mono: var(--font-brand-mono), ui-monospace, "Cascadia Mono", monospace;
+  --font-body: var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-manrope), ui-monospace, "Cascadia Mono", monospace;
 
   /* --- Màu ---------------------------------------------------------------
      Hệ đen-trắng + một màu nhấn. Xám sinh ra từ alpha của mực, không phải
@@ -71,7 +78,7 @@
      từng chỗ, nhưng giá trị giờ là màu đo từ ref, không phải màu T0 đoán sai.
      Code mới dùng utility của Tailwind (bg-page, text-ink, ...) thay vì mấy
      biến này; chúng sẽ rụng dần khi từng trang được dựng lại. */
-  --ink: 20 20 20;
+  --ink: 11 16 18;
   --bg: var(--color-page);
   --surface: var(--color-cream);
   --text: var(--color-ink);
@@ -85,12 +92,12 @@
   --err: #c5221f;
 
   /* --- Thang chữ --------------------------------------------------------- */
-  --step--1: 0.75rem;
-  --step-0: 0.875rem;
-  --step-1: 1rem;
-  --step-2: 1.5rem;
-  --step-3: 2rem;
-  --step-4: 3rem;
+  --step--1: 0.75rem; /* 12 — eyebrow, nhãn điều hướng, chữ pháp lý */
+  --step-0: 1rem; /* 16 — thân chữ chuẩn, link footer, form */
+  --step-1: 1.125rem; /* 18 — thân bài viết, chữ phụ của hero */
+  --step-2: 1.625rem; /* 26 — tiêu đề thẻ sản phẩm, tiêu đề thẻ lợi ích */
+  --step-3: 2.25rem; /* 36 — tiêu đề mục lợi ích */
+  --step-4: 3rem; /* 48 — hero, tiêu đề trang và tiêu đề mục chính */
 
   /* --- Khoảng cách (bước 4px) -------------------------------------------- */
   --space-1: 0.25rem;
@@ -103,11 +110,11 @@
   --space-8: 3.5rem;
 
   /* --- Bán kính ----------------------------------------------------------
-     Trang mẫu bo tròn mạnh: nút là viên thuốc, card 12px hoặc theo em.
-     Không có --shadow-*: giao diện phẳng, phân tách bằng viền. */
-  --radius-sm: 0.4em;
-  --radius-md: 12px;
-  --radius-lg: 1.5em;
+     Doc chỉ khai ba giá trị: 0, 4, 6. Mặt chính vuông góc, ảnh sản phẩm 4px,
+     capsule điều hướng 6px. Nút viên thuốc của bản trước không còn trong hệ. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
   --radius-pill: 999px;
 
   /* Bề rộng khung. Vẫn là 720px của bố cục hiện tại — T0 chỉ đổi giá trị

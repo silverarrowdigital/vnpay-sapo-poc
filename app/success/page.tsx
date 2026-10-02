@@ -18,7 +18,7 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
  * what distinguishes "this instance never saw the checkout" from "the record expired".
  */
 const TONE: Record<"ok" | "warn" | "err", string> = {
-  ok: "border-primary text-primary",
+  ok: "border-primary text-[color:var(--ok)]",
   warn: "border-[color:var(--warn)] text-[color:var(--warn)]",
   err: "border-[color:var(--err)] text-[color:var(--err)]",
 };
