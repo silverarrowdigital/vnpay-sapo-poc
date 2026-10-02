@@ -29,8 +29,8 @@ Dò bằng request chỉ-đọc trên chính store. Phân biệt được "endpo
 
 | Endpoint | Kết quả | Nghĩa là |
 |---|---|---|
-| `/admin/discounts.json` | `403 access_denied` | **Có thật**, Private App thiếu quyền |
-| `/admin/price_rules.json` | `403 access_denied` | **Có thật**, thiếu quyền |
+| `/admin/price_rules.json` | `403` → **`200` sau khi bật quyền** | **Đây là hệ giảm giá của Sapo** |
+| `/admin/discounts.json` | vẫn `403 access_denied` sau khi bật | Không cần tới — xem T7.3 |
 | `/admin/shipping_zones.json` | `403 access_denied` | **Có thật**, thiếu quyền |
 | `/admin/carrier_services.json` | `200` | Đã có quyền |
 | `/admin/customers.json` | `200` | Đã có quyền |
@@ -96,7 +96,14 @@ Mỗi nhóm có ba mức: *Không cho phép* · *Chỉ đọc* · *Đọc và gh
 
 **Một điều chưa chắc, nói trước:** `discounts.json` và `price_rules.json` gần như chắc thuộc nhóm *Khuyến mãi* — bật là xong. Nhưng `shipping_zones.json` cũng trả `access_denied` **dù ứng dụng đã có quyền đơn hàng + vận chuyển**, nên nó có thể không nằm trong nhóm nào mà ứng dụng riêng với tới được. Nếu bật xong mà nó vẫn `403` thì đó không phải lỗi cấu hình, và T7.2 sẽ đi đường bảng phí phẳng thay vì đọc vùng vận chuyển từ Sapo.
 
-**Nghiệm thu**: chạy lại script dò. `discounts.json` phải trả `200`. Kết quả của `shipping_zones.json` quyết định T7.2 đi hướng nào.
+**Nghiệm thu**: chạy lại script dò.
+
+**Kết quả thật, 2026-10-02 sau khi bật *Khuyến mãi → Chỉ đọc*:**
+
+- `/admin/price_rules.json` → **`200`**, trả `{"price_rules": []}`, `count` = 0. **Bước này xong.**
+- `/admin/discounts.json` → vẫn `403 access_denied`. **Không cần**: giống mô hình Shopify, hệ giảm giá nằm ở `price_rules`, còn `discounts.json` là tài nguyên khác mà ứng dụng riêng không với tới. Đừng bật thêm quyền chỉ vì nó đỏ.
+- `/admin/discount_codes.json` ở cấp gốc → không phải route (lỗi Spring có echo `path`). Mã giảm giá gần như chắc nằm **lồng dưới từng price rule**, đúng kiểu Shopify.
+- `/admin/shipping_zones.json` → vẫn `403`. Đúng như đã dự liệu: **không phải lỗi cấu hình**, nên **T7.2 đi đường bảng phí phẳng**.
 
 ### T7.1 — Địa chỉ giao hàng đúng chuẩn Việt Nam
 
@@ -123,7 +130,9 @@ Dù chọn mức nào: **phí phải cộng vào số tiền gửi sang VNPAY** 
 
 Luồng: khách nhập mã → server hỏi Sapo mã có thật/còn hạn/đủ điều kiện không → server tính lại tổng → ký URL VNPAY theo tổng **sau giảm** → khi tạo đơn, gửi kèm `discount_codes` để Sapo ghi nhận.
 
-Phải kiểm với tài liệu trước: Sapo trả điều kiện áp dụng ở dạng nào, và `POST /admin/orders.json` nhận `discount_codes` ra sao.
+**Chặn ở một việc nhỏ của bạn: store hiện có 0 price rule.** Không có dữ liệu thật thì không đọc được hình dạng của nó, và viết code theo phỏng đoán là đúng thứ `CLAUDE.md` cấm. Bạn tạo giúp **một mã giảm giá thử** trong Sapo (ví dụ `TEST10`, giảm 10%, không giới hạn) rồi báo tôi — tôi đọc cấu trúc thật rồi mới viết.
+
+Cần biết từ dữ liệu thật: tên trường của mức giảm, kiểu giảm (phần trăm hay số tiền), điều kiện áp dụng, hạn dùng, giới hạn lượt, và đường dẫn lồng để tra một mã cụ thể. Cộng thêm: `POST /admin/orders.json` nhận `discount_codes` ở dạng nào.
 
 **Nghiệm thu**: mã sai bị từ chối; mã hết hạn bị từ chối; mã thật giảm đúng; VNPAY thu đúng số sau giảm; đơn Sapo ghi đúng mã và đúng mức giảm. Và một bài riêng: **sửa số tiền giảm trong request** phải bị server bác.
 

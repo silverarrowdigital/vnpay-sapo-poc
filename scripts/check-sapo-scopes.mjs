@@ -24,8 +24,8 @@ if (!domain || !key || !secret) {
     ["/admin/products.json?limit=1", "Sản phẩm"],
     ["/admin/orders.json?limit=1", "Đơn hàng"],
     ["/admin/customers.json?limit=1", "Khách hàng"],
-    ["/admin/discounts.json", "Khuyến mãi — cần cho T7.3"],
-    ["/admin/price_rules.json", "Khuyến mãi — cần cho T7.3"],
+    ["/admin/price_rules.json", "Khuyến mãi — ĐÂY là hệ giảm giá, cần cho T7.3"],
+    ["/admin/discounts.json", "Khuyến mãi — đường cụt, xem T7.3"],
     ["/admin/shipping_zones.json", "Vận chuyển — cần cho T7.2"],
     ["/admin/carrier_services.json", "Vận chuyển"],
   ];
