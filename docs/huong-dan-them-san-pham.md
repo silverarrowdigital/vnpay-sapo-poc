@@ -96,7 +96,7 @@ Mở: **https://vnpay-sapo-poc.sanity.studio/**
 | Hợp với | câu ngắn mô tả dịp uống |
 | Huy hiệu lợi ích | tối đa 4, chữ ngắn viết hoa |
 
-### Mười khối trong khung, theo đúng thứ tự
+### Chín khối trong khung, theo đúng thứ tự
 
 | Thứ tự | Tên khối trong Studio | Dùng để |
 |---|---|---|
@@ -105,11 +105,10 @@ Mở: **https://vnpay-sapo-poc.sanity.studio/**
 | 3 | **Slider ảnh** | Bộ ảnh sản phẩm |
 | 4 | **Hàng logo** | Nơi đã nhắc đến sản phẩm |
 | 5 | **Hướng dẫn pha** | Lượng trà, nhiệt độ, thời gian + thang nhẹ↔đậm |
-| 6 | **Văn bản** | Hợp với bạn nếu — các gạch đầu dòng |
-| 7 | **Văn bản** | Trải nghiệm — một đoạn |
-| 8 | **Thẻ nguyên liệu** | Mỗi nguyên liệu một thẻ kèm dãy nhãn |
-| 9 | **Bảng so sánh** | Trà lá rời so với trà túi lọc |
-| 10 | **Câu hỏi thường gặp** | Câu hỏi của khách và câu trả lời |
+| 6 | **Câu hỏi thường gặp** | Tiêu đề *Nguyên liệu tinh khiết, lợi ích thật*, hai mục gập: *Hợp với bạn nếu* và *Trải nghiệm* |
+| 7 | **Thẻ nguyên liệu** | Mỗi nguyên liệu một thẻ kèm dãy nhãn |
+| 8 | **Bảng so sánh** | Trà lá rời so với trà túi lọc |
+| 9 | **Câu hỏi thường gặp** | Câu hỏi của khách và câu trả lời |
 
 Bạn được phép **xoá bớt, thêm, hoặc kéo đổi thứ tự** các khối tuỳ ý. Kéo bằng chấu bên trái
 mỗi khối.

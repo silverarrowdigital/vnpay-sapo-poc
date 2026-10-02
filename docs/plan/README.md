@@ -78,9 +78,11 @@ Khối slider ảnh cũ của T1 đã bị bỏ: ảnh trong đó là ảnh th�
 
 ## T5 — việc còn lại sau khi áp khung
 
-Khung T5 đã áp cho cả 5 sản phẩm Sapo đang hoạt động, sinh từ **một định nghĩa duy nhất** rồi đối chiếu từng khối (bỏ `_key`, chuẩn hoá thứ tự key) nên năm trang không thể lệch nhau.
+Khung T5 gồm **9 khối**, đã áp cho cả 5 sản phẩm Sapo đang hoạt động, sinh từ **một định nghĩa duy nhất** rồi đối chiếu từng khối (bỏ `_key`, chuẩn hoá thứ tự key) nên năm trang không thể lệch nhau.
 
 **Dùng lại `_id` đang có, không đặt theo quy ước.** `hong-tra-shan-tuyet-60g` được tạo từ Studio nên `_id` là UUID (`7e48fe61-…`), không phải `productContent-92784200`. Tạo mới theo quy ước sẽ cho **hai document cùng một sản phẩm**, mà kiểm tra trùng chỉ chạy lúc sửa trong Studio chứ không cứu được lúc đọc — truy vấn `[0]` sẽ lấy bừa một cái. Script nhân khung vì vậy đọc `_id` hiện có trước khi ghi.
+
+**Sửa 2026-10-02**: *Hợp với bạn nếu* và *Trải nghiệm* trước đây là hai khối `richText` riêng, mỗi khối một `h2` — hai mục ngang hàng về nội dung lại nằm rời nhau và tranh cấp tiêu đề với heading chung. Giờ gộp thành **một accordion**: heading khối giữ `h2`, hai mục thành hai `<details>` cùng cấp. Gạch đầu dòng vẫn render được bên trong mục gập.
 
 Hai thứ còn chờ chủ cửa hàng:
 
