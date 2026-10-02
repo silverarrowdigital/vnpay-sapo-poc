@@ -63,6 +63,7 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/fetch-reference.mjs` | Dev-only: re-download the UI reference into `design/reference/site/` |
 | `scripts/check-revalidate.mjs` | Dev-only: four signed/unsigned requests at `/api/revalidate`, checking what the signature guard actually refuses |
 | `design/TOKENS.md` | Where every design token came from, with its source |
+| `docs/huong-dan-them-san-pham.md` | Shop-owner guide (Vietnamese, no CLI): add a Sapo product, then its Sanity content. Written for someone who is not a developer |
 
 `lib/*` is framework-independent (no `next` imports) so it can be tested in isolation. Inside `lib/`, use relative imports; app code uses `@/`.
 
