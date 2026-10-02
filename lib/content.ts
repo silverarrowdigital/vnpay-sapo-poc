@@ -2,11 +2,20 @@
  * CMS content for a product page. Server-only.
  *
  * Sapo stays the source of truth for name, price and stock (lib/catalog.ts); Sanity only holds
- * how a product is presented. So this module never throws: an unconfigured, unreachable or
- * empty CMS all resolve to `undefined`, and the product page falls back to the plain-text
- * description Sapo already gives it.
+ * how a product is presented, so a CMS problem must never stop a product being sold.
+ *
+ * **Two different "no content" answers, and they must not be confused.** An unconfigured CMS, a
+ * product nobody has written about, and an empty block list are all stable facts: `undefined`,
+ * and the caller is free to cache that. A query that *failed* is not a fact about the product —
+ * it is a fact about this moment — so it throws, and the caller must not record it as an answer.
+ *
+ * This module used to swallow the second into the first. Combined with the five-minute cache in
+ * app/products/[handle]/page.tsx, one timed-out query was written down as "this product has no
+ * description" and served for five minutes — and because the refresh runs in the background just
+ * after a publish, it struck exactly when an editor was looking at their new page. Hit for real
+ * on 2026-10-02.
  */
-import { groqQuery } from "./sanity";
+import { groqQueryOrThrow, sanityClient } from "./sanity";
 import type { ContentBlock } from "./blocks";
 
 /**
@@ -36,6 +45,9 @@ const IMAGE_FIELDS = `
  * The conditional overrides exist only to resolve image assets, and they resolve the *whole*
  * image: an optional one projects to `null` when the editor left it empty, which the components
  * test for by truthiness rather than against `undefined`.
+ *
+ * Changing this string does not change the cache key — see the warning in CLAUDE.md about
+ * revalidating after a deploy that touches it.
  */
 export const BLOCKS_PROJECTION = `{
   ...,
@@ -60,13 +72,22 @@ export const BLOCKS_PROJECTION = `{
 const PRODUCT_CONTENT_QUERY = `*[_type == "productContent" && sapoProductId == $productId][0].blocks[]${BLOCKS_PROJECTION}`;
 
 /**
- * Blocks for one Sapo product, or `undefined` when there is nothing to render — no document for
- * this product, an empty block list, Sanity not configured, or the query failed. Callers treat
- * all of those the same way, so they are not distinguished.
+ * Blocks for one Sapo product, or `undefined` when there is genuinely nothing to render: an
+ * invalid id, a CMS that is switched off, no document for this product, or an empty block list.
+ * Those four are the same thing to a caller and are all safe to cache.
+ *
+ * @throws SanityUnavailableError when the CMS is configured but could not answer — unreachable,
+ * too slow, or a query error. The caller renders without blocks *and does not cache the result*,
+ * so the next request tries again instead of inheriting a five-minute hole.
  */
 export async function getProductContent(productId: number): Promise<ContentBlock[] | undefined> {
   if (!Number.isSafeInteger(productId) || productId <= 0) return undefined;
-  const blocks = await groqQuery<ContentBlock[] | null>("product_content", PRODUCT_CONTENT_QUERY, { productId });
-  if (blocks === undefined || blocks === null || blocks.length === 0) return undefined;
+  // Not configured is a stable answer, not a failure: the storefront is meant to run without a
+  // CMS at all, and throwing here would mean throwing on every request forever.
+  if (sanityClient() === undefined) return undefined;
+  const blocks = await groqQueryOrThrow<ContentBlock[] | null>("product_content", PRODUCT_CONTENT_QUERY, {
+    productId,
+  });
+  if (blocks === null || blocks.length === 0) return undefined;
   return blocks;
 }

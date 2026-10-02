@@ -120,8 +120,8 @@ Mở trang sản phẩm trên website:
 https://vnpay-sapo-poc.vercel.app/products/<alias-của-bạn>
 ```
 
-**Tải lại trang một lần nữa.** Đây không phải thừa: lần mở đầu tiên sau khi Publish thường vẫn
-còn hiện bản cũ, lần thứ hai mới ra bản mới. Hệ thống cố ý làm vậy cho trang nhanh.
+**Tải lại trang một lần nữa.** Lần mở đầu tiên sau khi Publish đôi khi vẫn còn hiện bản cũ; lần
+thứ hai mới ra bản mới. Hệ thống cố ý làm vậy cho trang nhanh.
 
 Bạn phải thấy đủ: phần hướng dẫn pha, mục mô tả mở ra đóng vào được, 3 ô đặc điểm có ảnh, bảng
 gợi ý pha, và phần câu hỏi thường gặp.
@@ -136,6 +136,7 @@ gợi ý pha, và phần câu hỏi thường gặp.
 | Có trang sản phẩm nhưng **không có nút mua** | Tồn kho đang bằng 0 → trang ghi "Hết hàng" |
 | Có trang, **phần mô tả trống trơn** | **Sai số id.** Mở lại Studio, so từng chữ số với thanh địa chỉ bên Sapo |
 | Sửa chữ xong mà web **vẫn hiện bản cũ** | Tải lại trang thêm một lần. Vẫn vậy thì kiểm tra đã bấm Publish chưa |
+| Mô tả **hiện lúc đầu rồi biến mất** ở lần tải sau | Chờ 5 phút rồi tải lại. Nếu vẫn trống, báo người kỹ thuật — đây là sự cố đã biết và đã được sửa ngày 2026-10-02 |
 | Studio báo đỏ ô id | Sản phẩm đó đã có một tài liệu mô tả rồi. Tìm và sửa tài liệu cũ, đừng tạo cái thứ hai |
 | **Ảnh biến mất hết** sau một lần cập nhật kỹ thuật | Đây là việc của người kỹ thuật, không phải lỗi của bạn — xem mục "projection" trong `CLAUDE.md` |
 

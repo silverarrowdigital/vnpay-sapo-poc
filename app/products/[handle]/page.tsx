@@ -28,6 +28,13 @@ export const dynamic = "force-dynamic"; // stock and price must never be served 
  *
  * Cost of the 5-minute window: new content takes up to that long to appear, and a stale entry
  * survives a dev-server restart — clear `.next` if content will not budge. See CLAUDE.md.
+ *
+ * **A failed query must never land in here.** getProductContent returns `undefined` for the
+ * stable "nothing to show" cases and throws for a CMS that could not answer; an error thrown
+ * out of this function leaves the cache untouched, so the next request retries. Swallowing it
+ * here instead would write "this product has no description" down for five minutes on the
+ * strength of one timeout — which is what happened on 2026-10-02, to a page whose owner had
+ * just published it.
  */
 const cachedProductContent = unstable_cache(
   async (productId: number) => (await getProductContent(productId)) ?? null,
@@ -70,9 +77,19 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
   if (product === null) notFound();
 
   const soldOut = isSoldOut(product);
-  // Never throws: lib/content.ts turns an unconfigured, unreachable or empty CMS into null, and
-  // the page falls back to Sapo's own description below. A CMS outage must not stop a sale.
-  const blocks = await cachedProductContent(product.productId);
+  // A CMS outage must not stop a sale, so it is caught — but caught *here*, outside the cache,
+  // so the failure is never recorded as an answer. The page falls back to Sapo's own
+  // description below, and the next request asks Sanity again rather than inheriting a
+  // five-minute hole.
+  let blocks: Awaited<ReturnType<typeof cachedProductContent>> = null;
+  try {
+    blocks = await cachedProductContent(product.productId);
+  } catch (err) {
+    log.warn("product_content.unavailable", {
+      productId: product.productId,
+      error: errorMessage(err),
+    });
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1416px] px-4">
