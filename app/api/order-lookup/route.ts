@@ -44,7 +44,28 @@ export async function POST(request: NextRequest) {
     if (result.outcome === "not_found") {
       return NextResponse.json({ error: "Không tìm thấy đơn hàng khớp với thông tin này." }, { status: 404 });
     }
-    return NextResponse.json({ order: result.order, paymentMethod: result.paymentMethod });
+    // Listed field by field rather than spread, so `phoneDigits` — and anything added to
+    // SapoOrderDetail later — cannot reach the browser by accident. That field exists for the
+    // server's own comparison: the caller already knows the number they typed, and echoing the
+    // stored one back would make a loosened comparison into an oracle that completes a
+    // partially-known phone number.
+    const o = result.order;
+    return NextResponse.json({
+      order: {
+        id: o.id,
+        name: o.name,
+        createdOn: o.createdOn,
+        financialStatus: o.financialStatus,
+        fulfillmentStatus: o.fulfillmentStatus,
+        status: o.status,
+        totalVnd: o.totalVnd,
+        shippingVnd: o.shippingVnd,
+        discountVnd: o.discountVnd,
+        lines: o.lines,
+        address: o.address,
+      },
+      paymentMethod: result.paymentMethod,
+    });
   } catch (err) {
     if (err instanceof MissingEnvError) {
       log.error("lookup.config_error", { missing: err.missing, placeholder: err.placeholder });

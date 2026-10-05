@@ -81,6 +81,21 @@ export interface SapoConfig {
    * Without this id the line item is custom and no stock moves. See lib/sapo.ts.
    */
   variantId?: number;
+  /**
+   * Ask Sapo to email the customer its own order confirmation (`send_receipt` on the create call).
+   *
+   * **Off by default, and that default is deliberate.** Turning it on makes Sapo send mail to a
+   * real address the moment an order is created, so it must be a decision the shop takes, not
+   * something that starts happening because the code was deployed. Whether Sapo actually delivers
+   * that mail for an API-created order is **not verified here** — verifying it means sending a real
+   * email, which is not a test that can be undone. Set `SAPO_SEND_RECEIPT=true` and place one order
+   * to find out.
+   *
+   * If it turns out Sapo does not send one, the alternative is a mail provider of our own, which is
+   * outside this project: it needs credentials, a verified sending domain, and a decision about
+   * which service. See docs/plan/T7-ban-hang-that.md § T7.6.
+   */
+  sendReceipt: boolean;
 }
 
 export function getSapoConfig(): SapoConfig {
@@ -94,7 +109,10 @@ export function getSapoConfig(): SapoConfig {
       throw new MissingEnvError(["SAPO_VARIANT_ID (must be a positive integer if set)"]);
     }
   }
-  return { storeDomain, apiKey: env.SAPO_API_KEY, apiSecret: env.SAPO_API_SECRET, variantId };
+  // Only the literal "true" turns it on. Anything else — unset, "false", "1", a stray space — is
+  // off, because the failure mode of a loose reading here is mail to a customer nobody intended.
+  const sendReceipt = read("SAPO_SEND_RECEIPT")?.toLowerCase() === "true";
+  return { storeDomain, apiKey: env.SAPO_API_KEY, apiSecret: env.SAPO_API_SECRET, variantId, sendReceipt };
 }
 
 export interface SanityConfig {

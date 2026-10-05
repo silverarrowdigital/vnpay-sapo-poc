@@ -83,6 +83,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <footer className="mt-24 border-t border-line">
           <div className="mx-auto flex w-full max-w-[1416px] flex-col gap-2 px-4 py-10 text-xs text-ink-soft sm:flex-row sm:items-center sm:justify-between">
             <p className="m-0">Bản dựng thử nghiệm — thanh toán qua VNPAY Sandbox, đơn hàng ghi vào Sapo.</p>
+            {/* The lookup page lives in the footer rather than the main nav: the reference design's
+                nav is copied link for link, and this is ours, not theirs. A customer looking for
+                their order looks at the bottom of the page — or follows the link on /success. */}
+            <p className="m-0">
+              <Link href="/tra-cuu-don" className="no-underline hover:underline">
+                Tra cứu đơn hàng
+              </Link>
+            </p>
             <p className="m-0 font-mono">VNPAY → Sapo PoC</p>
           </div>
         </footer>

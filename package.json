@@ -17,7 +17,8 @@
     "studio:dev": "sanity dev",
     "studio:deploy": "sanity deploy",
     "check:revalidate": "node --env-file=.env.local scripts/check-revalidate.mjs",
-    "check:sapo-scopes": "node --env-file=.env.local scripts/check-sapo-scopes.mjs"
+    "check:sapo-scopes": "node --env-file=.env.local scripts/check-sapo-scopes.mjs",
+    "querydr": "node --env-file=.env.local scripts/querydr.mjs"
   },
   "dependencies": {
     "@portabletext/react": "^8.0.1",

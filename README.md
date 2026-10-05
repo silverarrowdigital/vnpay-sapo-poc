@@ -126,6 +126,55 @@ npm run simulate:ipn -- <txnRef> <amountVnd> 24       # simulate a cancelled pay
 
 This signs the callback with your own `VNPAY_HASH_SECRET` and creates a real Sapo order on success. Dev use only.
 
+### Cash on delivery, and the quickest payload test there is
+
+A COD checkout needs **no VNPAY configuration and no tunnel**: it creates the Sapo order
+immediately, through the same payload builder a paid order uses. With `npm run dev`:
+
+```bash
+curl -s -X POST localhost:3000/api/checkout -H 'Content-Type: application/json' -d '{
+  "name":"Nguyen Van Test","phone":"0912345678","email":"test@example.com",
+  "address":"14/8 Lam Son","provinceId":2,"districtId":30,"wardId":9219,
+  "paymentMethod":"cod","discountCode":"TEST10",
+  "lines":[{"variantId":<variantId>,"quantity":1}]
+}'
+```
+
+It answers `{txnRef, method:"cod", orderName, successUrl}` and the order is in Sapo as
+`financial_status: pending`. Get a `variantId` from `localhost:3000/api/catalog`, and province /
+district / ward ids from `/api/locations?level=provinces`, then `…&level=districts&parentId=<id>`.
+
+**It creates a real order and it moves real stock.** Deleting the order afterwards does *not* put
+the stock back and does *not* un-count a discount code — so delete that one order by its id and fix
+the stock by hand, rather than running the bulk cleanup below.
+
+### Pricing without touching the store
+
+`/api/quote` is read-only and returns exactly what the checkout will charge — goods, discount,
+delivery, total:
+
+```bash
+curl -s -X POST localhost:3000/api/quote -H 'Content-Type: application/json' \
+  -d '{"lines":[{"variantId":<id>,"quantity":1}],"provinceId":2,"discountCode":"TEST10"}'
+```
+
+### Finding an order again
+
+`/tra-cuu-don` takes the reference from the result page plus the phone number on the order. No
+account. The same page prints as the order slip (not a VAT invoice — see
+`docs/plan/T7-ban-hang-that.md` § T7.7).
+
+### Asking VNPAY what really happened
+
+For an order stuck in `pending` or `sapo_error`:
+
+```bash
+npm run querydr -- <txnRef>
+```
+
+Read-only. It prints VNPAY's own verdict and, when the money was taken, the single command that
+would finish the order.
+
 ### Cleaning up test orders
 
 Every successful simulated IPN creates a **real** Sapo order. To remove the ones this PoC made

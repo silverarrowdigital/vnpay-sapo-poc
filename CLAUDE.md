@@ -8,7 +8,10 @@ Prove one flow end to end, with the smallest possible system:
 
 **Product → Checkout → VNPAY Sandbox payment → server-side payment verification (IPN) → order created in Sapo.**
 
-Not a full store: one hardcoded product, no database, no auth, no extra third-party services.
+Since T7 it is also a shop that can actually take an order: a real Vietnamese address, a delivery
+fee, a Sapo discount code, cash on delivery, and a way for the customer to find their order again.
+
+Not a full store: no database beyond Redis, no auth, no accounts, no extra third-party services.
 
 ## Architecture
 
@@ -16,16 +19,29 @@ Not a full store: one hardcoded product, no database, no auth, no extra third-pa
 Browser                         Next.js (App Router, Node runtime)                External
 ───────                         ─────────────────────────────────                 ────────
 /            product page
-/checkout    CheckoutForm ──POST /api/checkout──► validate, price server-side,
-                                                  create txnRef, store pending,
-             ◄── { paymentUrl } ────────────────  sign VNPAY URL
+/checkout    AddressSelects ─GET /api/locations──► provinces/districts/wards ◄─ Sapo
+             CheckoutForm ──POST /api/quote─────► reprice from Sapo, verify code,
+             ◄── { goods, discount, ship, total }  quote delivery   (display only)
+
+             CheckoutForm ──POST /api/checkout──► validate, reprice from Sapo,
+                                                  resolve address, verify discount,
+                                                  quote delivery, store pending
+                              ┌── paymentMethod = vnpay ──────────────────────────┐
+             ◄── { paymentUrl } ────────────────  sign VNPAY URL  (total = the one amount)
              ── redirect ──────────────────────────────────────────────────────► VNPAY sandbox
                                                   GET /api/vnpay/ipn  ◄──────── VNPAY (server-to-server)
                                                     verify checksum → order → amount → not done
                                                     success? → Sapo POST /admin/orders.json ─► Sapo
+                                                               financial_status: paid
              ◄── GET /api/vnpay/return ◄─────────────────────────────────────── VNPAY (browser)
                   verify checksum only, redirect →
-/success     reads server-side order state (auto-refreshes until IPN arrives)
+                              └── paymentMethod = cod ────────────────────────────┘
+             ◄── { successUrl } ──────────────── Sapo POST /admin/orders.json ──► Sapo
+                                                  financial_status: pending, no transaction
+/success     reads server-side order state (auto-refreshes until the IPN arrives)
+/tra-cuu-don OrderLookup ──POST /api/order-lookup► ref + phone → GET /admin/orders.json ─► Sapo
+                                                  rate-limited; wrong phone == no order
+                                                  same markup prints as the order slip
 ```
 
 | Path | Role |
@@ -42,12 +58,21 @@ Browser                         Next.js (App Router, Node runtime)              
 | `app/sitemap.ts` | Listings, products and posts |
 | `sanity/schemas/post.ts`, `sanity/schemas/author.ts` | Blog schemas. `post.body` uses the same `blocksField` as `productContent` |
 | `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state |
-| `app/api/checkout/route.ts` | Validate input, start checkout, return VNPAY URL |
+| `app/api/checkout/route.ts` | Validate input, start checkout, return a VNPAY URL **or** create the COD order |
+| `app/api/quote/route.ts` | Price a cart for display: goods, discount, delivery, total. Calls the same `quoteTotals` the real checkout uses, so the summary cannot drift from the charge |
+| `app/api/locations/route.ts` | Provinces / districts / wards, one level at a time. Refuses to serve a whole table |
+| `app/api/order-lookup/route.ts` | Reference + phone → one order. A wrong phone and a missing order answer identically |
+| `app/tra-cuu-don/page.tsx`, `components/OrderLookup.tsx` | Customer order lookup, and the printable slip (same markup, `@media print`) |
+| `components/AddressSelects.tsx` | Tỉnh/thành → quận/huyện → phường/xã, cascading |
+| `components/formField.ts` | The one input style, shared by the form's two components |
 | `app/api/vnpay/return/route.ts` | Browser return: checksum check + redirect. **Never mutates state.** |
-| `app/api/vnpay/ipn/route.ts` | VNPAY IPN: **the only place a Sapo order is created** |
+| `app/api/vnpay/ipn/route.ts` | VNPAY IPN: **the only place a *paid* Sapo order is created** (COD creates an unpaid one — security rule 2) |
 | `lib/vnpay.ts` | VNPAY URL building, HMAC-SHA512 signing/verification, date format, codes |
 | `lib/sapo.ts` | Sapo Admin API client: payload, create, idempotent lookup |
-| `lib/order.ts` | Validation, IPN state machine, return classification |
+| `lib/order.ts` | Validation, totals, IPN state machine, COD order creation, rate-limit policies, order lookup |
+| `lib/shipping.ts` | Delivery fees — **client-safe**, and the only place a fee is computed |
+| `lib/discount.ts` | Sapo `price_rules` → a verified, server-computed discount |
+| `lib/locations.ts` | Vietnam's administrative divisions, read from Sapo and memoised per process |
 | `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
 | `lib/product.ts` | Hardcoded product (safe for client import) |
@@ -62,6 +87,7 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/auto-ipn.mjs` | Dev/recovery: find that callback in the dev log by itself (`--watch` to follow) |
 | `scripts/fetch-reference.mjs` | Dev-only: re-download the UI reference into `design/reference/site/` |
 | `scripts/check-revalidate.mjs` | Dev-only: four signed/unsigned requests at `/api/revalidate`, checking what the signature guard actually refuses |
+| `scripts/querydr.mjs` | Ask VNPAY what really happened to a transaction (API 2.1.0 `querydr`). Read-only; prints the one command that would finish the order |
 | `design/TOKENS.md` | Where every design token came from, with its source |
 | `docs/huong-dan-them-san-pham.md` | Shop-owner guide (Vietnamese, no CLI): add a Sapo product, then its Sanity content. Written for someone who is not a developer |
 
@@ -72,9 +98,10 @@ Browser                         Next.js (App Router, Node runtime)              
 - TypeScript strict. **Tailwind CSS v4** (`@import "tailwindcss"` in `app/globals.css`, `postcss.config.mjs`), plus project CSS in the same file. No `tailwind.config.js` — v4 scans the project itself and declares tokens with `@theme`.
   - Chosen so the storefront can be rebuilt faithfully from `design/reference/`, which is a Tailwind site: sharing the utility vocabulary makes the reference markup comparable class by class. An earlier decision said "plain CSS, no framework"; it was made partly on a Tailwind detection I mis-read, and is reversed. See `docs/plan/T3-ui-redesign.md`.
   - Preflight (Tailwind's reset) removes browser defaults. Anything relying on them must be declared — e.g. `ul`/`ol` bullets in CMS rich text (`.rt-list`).
-- Server-only modules (`config`, `vnpay`, `sapo`, `order`, `log`, `sanity`, `content`) must never be imported from a `"use client"` file. Two modules in `lib/` are client-safe: `lib/product.ts`, and `lib/blocks.ts` — the latter holds types only and its single import is type-only (erased at compile time), which is what `ImageSlider`/`VideoEmbed` need. Keep it that way: no config, no client, no logger.
+- Server-only modules (`config`, `vnpay`, `sapo`, `order`, `log`, `sanity`, `content`, `discount`, `locations`) must never be imported from a `"use client"` file. **Three** modules in `lib/` are client-safe: `lib/product.ts`, `lib/blocks.ts` — which holds types only and whose single import is type-only (erased at compile time), what `ImageSlider`/`VideoEmbed` need — and `lib/shipping.ts`. Keep them that way: no config, no client, no logger.
+  - `lib/shipping.ts` is client-safe **so that there is exactly one fee calculation**. The fee has to show in the checkout summary, be added to the amount the VNPAY URL is signed with, and be sent to Sapo as a `shipping_line`; the plan's third big risk is those three disagreeing. One pure function used by all three makes them agree by construction, and the browser only ever displays what it returns.
 - The UI is built from the token layer at the top of `app/globals.css` (`--ink`, `--accent`, `--step-*`, `--space-*`, `--radius-*`, `--font-*`), extracted from `design/reference/` with every value's source recorded in `design/TOKENS.md`. New components use the variables; no hardcoded colours or pixel values. There is **no dark mode** — the reference design has one theme, so inventing a second with nothing to check it against was not worth the contrast work.
-- Prices are always computed on the server from `PRODUCT`; never trust amounts from the browser.
+- Prices are always computed on the server from the live Sapo catalog; never trust amounts from the browser. That now covers three numbers, not one: the goods subtotal, the **delivery fee** (from the resolved province) and the **discount** (from a Sapo price rule). The browser sends quantities, three address ids and a discount *code* — nothing else about money.
 - Log with `log.info/warn/error(event, data)`. Never log secrets or full customer records (txnRef, amounts, codes, Sapo ids are fine).
 - Keep integrations in their module; routes stay thin.
 
@@ -91,6 +118,8 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SAPO_STORE_DOMAIN` | yes | e.g. `your-store.mysapo.net` |
 | `SAPO_API_KEY` / `SAPO_API_SECRET` | yes | Sapo Private App credentials, Orders read+write |
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
+| `SAPO_SEND_RECEIPT` | no | `true` asks Sapo to email the customer its own order confirmation. Off by default on purpose — see below |
+| `VNPAY_QUERYDR_URL` | no | Override for the `querydr` endpoint used by `npm run querydr`. Defaults to the sandbox one |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
 | `ORDER_STORE_NAMESPACE` | no | Overrides the Redis key namespace (see below). Empty string selects production's |
@@ -108,15 +137,33 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
 ## Security rules
 
 1. VNPAY and Sapo credentials live only in env vars and server code.
-2. Payment success is decided **only** by a checksum-verified IPN. The return URL is display-only.
+2. **Payment success is decided only by a checksum-verified IPN, and only the IPN may mark an order
+   paid.** The return URL is display-only. COD (T7.5) opens the second and only other door into
+   Sapo, so the rule is stated as two halves that must both hold:
+   - A **VNPAY** order is created only by `app/api/vnpay/ipn/route.ts`, and only ever as
+     `financial_status: "paid"`.
+   - A **COD** order is created only by `placeCodOrder` in `lib/order.ts`, and only ever as
+     `financial_status: "pending"`, with **no `transactions` array**. Nothing on that path can
+     mark an order paid, so no amount of calling it can fabricate a payment record — only an
+     unpaid order a human confirms by phone. What it *can* produce is junk orders, which is what
+     the rate limit on `/api/checkout` is for.
 3. IPN check order (from VNPAY docs): checksum (97) → order exists (01) → amount matches (04) → not already confirmed (02) → apply result.
 4. Success requires `vnp_ResponseCode === "00"` **and** `vnp_TransactionStatus === "00"`.
 5. Signature comparison is constant-time.
-6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code.
+6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code. The
+   order-lookup page accepts a prefilled reference in its query string but **never** the phone
+   number, so a shared link is not a shared address book.
 7. Never invent API endpoints. Anything new must be checked against the official docs listed below.
 8. **No CMS content is ever rendered as HTML.** `htmlToText` already strips Sapo's description; Sanity rich text goes through Portable Text into our own React elements (`components/blocks/RichText.tsx`). No `dangerouslySetInnerHTML` anywhere.
 9. **A video block stores `provider` (enum) + `videoId` (regex-validated), never a URL and never an iframe.** The player address is assembled in `components/blocks/VideoEmbed.tsx`, so nothing typed into the CMS can retarget the frame. The iframe is also not created until the reader presses play, so a reader who never watches sends no request to the video host.
 10. Links in CMS rich text are restricted by schema to `http`, `https`, `mailto`.
+11. **A discount is a code from the browser and an amount from the server.** `/api/quote` exists to
+    display a total and is otherwise worthless: `/api/checkout` re-verifies the code against Sapo
+    and recomputes the money before signing anything. Accepting an amount from the browser would be
+    a gift to anyone who can open DevTools.
+12. **The order lookup is rate-limited and answers failures identically.** A reference is a
+    timestamp plus six digits — guessable with enough tries — so the phone-number check is backed by
+    a counter in the shared store, and "wrong phone" is indistinguishable from "no such order".
 
 ## VNPAY flow (API 2.1.0) — verified docs
 
@@ -161,6 +208,40 @@ replay, and a repeated IPN answering `02` while stock stayed put.
 - Attributes (`financial_status`, `note_attributes`, `tags`, `source_name`) — https://support.sapo.vn/cac-thuoc-tinh-cua-order-api
 
 Payload sent (see `buildOrderPayload`): email, phone, `line_items` — one per cart line, each either `{variant_id, quantity, price}` or, with no variant, custom `{title, sku, price, quantity}`, `customer {first_name, last_name, email, phone}`, billing + shipping address (`address1`, `country: Vietnam`), `financial_status: "paid"`, `transactions [{kind: sale, status: success, amount, gateway: VNPAY}]`, `note`, `note_attributes` (vnp_TxnRef, vnp_TransactionNo, vnp_BankCode, vnp_PayDate, sku, amount_vnd), `tags` (`headless-poc, vnpay, vnpay-<txnRef>`), receipts off.
+
+**T7 additions to the payload, every one verified on a live order (#1025, COD, 2026-10-05, created
+through `/api/checkout` itself and then deleted).** The order was goods 268,000 − discount 26,800 +
+delivery 25,000:
+
+- **`shipping_lines` IS persisted** — unlike `transactions`. Sent as `{title, code, price, source}`
+  and read back with `carrier`, `carrier_name`, `discount_allocations`, `tax_lines` added by Sapo.
+  `total_shipping_price` came back 25,000.
+- **`discount_codes` is persisted and counted.** Sent as `{code, amount, type: "fixed_amount"}`, it
+  came back with `"custom": true` and `discount_applications[0].price_rule_id: **null**` — which
+  looks like the rule was not matched. **It was:** the rule's `times_used` and the code's
+  `usage_count` both went 0 → 1. So the `usage_limit` check in `lib/discount.ts` reads a counter
+  Sapo really does maintain for API-created orders. Do not "fix" the null `price_rule_id`.
+- **The discount is sent as the amount we charged, as `fixed_amount`, even for a percentage rule.**
+  Sending `percentage` would ask Sapo to recompute it, and one đồng of rounding difference would put
+  the order total out of step with the money VNPAY took. It lands at order level:
+  `cart_discount_amount` 26,800, while `line_items[].total_discount` stays 0.
+- **`total_price` came back 266,200** — exactly goods − discount + shipping, i.e. the number the
+  summary showed and the number VNPAY would be asked for. The three places agree.
+- **`district`/`district_code`/`ward`/`ward_code` are stored**, even though the attribute docs stop
+  at `province`. Sapo also **filled `city` itself** ("TP Hồ Chí Minh") from the province, which is
+  why `buildOrderPayload` does not send one.
+- **A COD order comes back `financial_status: "pending"`, `unpaid_amount` = the total,
+  `net_payment: 0`, `gateway: null`.** The null gateway is expected: Sapo derives the order's
+  top-level gateway from `transactions`, and a COD order deliberately sends none. Its payment
+  method lives in `note_attributes.payment_method`, the note and the tags.
+- **Stock moves on a COD order too** (115 → 114 on a quantity of 1), because the line carries a
+  `variant_id` and the payload sends `inventory_behaviour`. That is right for COD — the goods are
+  committed — but it means **a cancelled COD order needs a manual restock**.
+- **`DELETE /admin/orders/{id}.json` does not restock and does not decrement `times_used`.**
+  Verified on the same order: deleting it left stock at 114 and the code's usage at 1. A deleted
+  test order is not an undone test order.
+- **`?fields=` is ignored on `GET /admin/orders.json`** — the full object comes back regardless.
+  Harmless (it is a superset), but do not rely on it to keep a response small.
 
 **Discounts live in `price_rules`, and the code is not where it looks.** Verified against a live store on 2026-10-02 with one real rule created for the purpose:
 
@@ -322,7 +403,18 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
 - Env problems: see README "Troubleshooting". `.env.local` is gitignored, so it never exists in a fresh copy of the repo — `cp .env.example .env.local` and fill it in, then restart the server.
 - IPN → Sapo without VNPAY reaching you: start checkout, copy the reference from the VNPAY URL / result page, then `npm run simulate:ipn -- <txnRef> <amountVnd>`. Expect `{"RspCode":"00"}` and a new Sapo order; re-run to see `02`.
 - Full sandbox: see README "Test VNPAY Sandbox → Sapo".
-- Every successful simulated IPN creates a **real** Sapo order. `npm run clean:orders` lists them (tag `headless-poc`), `-- --yes` deletes them via `DELETE /admin/orders/{id}.json`.
+- Every successful simulated IPN creates a **real** Sapo order. `npm run clean:orders` lists them (tag `headless-poc`), `-- --yes` deletes them via `DELETE /admin/orders/{id}.json`. **It deletes every order with that tag, not just the newest** — to drop one test order, delete that id alone. And deleting does not restock or un-count a discount code (see the Sapo section).
+- **Delivery and discount, without touching the store:** `/api/quote` is read-only, so the arithmetic can be exercised directly. With `npm run dev`:
+  ```bash
+  curl -s -X POST localhost:3000/api/quote -H 'Content-Type: application/json'     -d '{"lines":[{"variantId":<id>,"quantity":1}],"provinceId":2,"discountCode":"TEST10"}'
+  ```
+  The cases that matter: a province in each zone; a basket above the free-shipping threshold; a code
+  in the wrong case (must be accepted and echo Sapo's own spelling); and **a one-letter code**, which
+  must be refused — `?query=T` matches `TEST10` server-side, so accepting it would be the fuzzy-search
+  trap reopening. Verified 2026-10-05: `T` → refused, `test10` → `TEST10` −26,800.
+- **COD end to end, locally:** POST the full checkout body with `"paymentMethod":"cod"`. It needs no VNPAY config and no tunnel, and it creates a **real** Sapo order immediately — the fastest way to check a payload change, and the way #1025 was verified. Delete that one order afterwards by its id.
+- **Order lookup:** `/tra-cuu-don` with the reference and the phone number on the order. A wrong phone must answer exactly like an unknown reference; if it ever differs, the page has become an oracle.
+- **Stuck order:** `npm run querydr -- <txnRef>` asks VNPAY what really happened. Read-only. Verified live 2026-10-05 against a real past transaction (`00`/`00`, NCB, 1,340,000đ, matching order #1024). Its checksum is **nine values joined with `|`** in a fixed order, not the sorted `key=value` of the payment URL — signing it the payment way gives a well-formed request that answers `97`.
 
 ### Recovering a paid order VNPAY never announced
 
@@ -365,17 +457,25 @@ The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON ins
 
 - **The in-memory fallback is still in-memory**: with no Redis env vars, `lib/store.ts` uses a Map, so pending orders are lost on restart and never shared between instances. That is fine for `next dev`/`next start` on one machine and wrong on Vercel, where the IPN may land on an instance that never saw the checkout and answer `01`. Configure Redis for any serverless deployment; the result page names which backend is in use when it cannot find an order.
 - If an order is lost from memory, a paid VNPAY transaction cannot be turned into a Sapo order automatically; reconcile manually via VNPAY merchant portal.
-- No querydr/refund APIs, no inventory reservation, no email receipts, no rate limiting, no CSRF token on `/api/checkout` (JSON-only POST).
+- No refund API, no inventory reservation, no CSRF token on `/api/checkout` (JSON-only POST). `querydr` exists as a **read-only script**, not an automatic job: it tells a person what VNPAY thinks and prints the command that would finish the order.
+- **Email confirmation is a switch, not a feature.** `SAPO_SEND_RECEIPT=true` asks Sapo to send its own confirmation; whether Sapo actually delivers it for an API-created order is **unverified**, because finding out means sending a real email. If it does not, a mail provider of our own is needed, which is outside this project (credentials, a verified sending domain, a choice of service).
+- **`once_per_customer` on a discount rule cannot be enforced.** There are no customer accounts, so a code marked once-per-customer is accepted and logged (`discount.once_per_customer_unenforced`) rather than refused. The exposure is one extra discount per reuse and it is visible in Sapo; refusing every such code would be worse.
+- **A discount rule whose conditions we cannot evaluate is refused outright** — entitled products/variants/collections/provinces, customer groups, saved searches, locations, buy-X-get-Y ratios, a non-`all` customer selection, or a shipping-target rule. The customer is told the code has a condition the site cannot apply. Honouring the parts we understand would charge a discount the shop never offered.
+- **The delivery fee is a flat table, not a carrier quote.** `GET /admin/shipping_zones.json` answers `access_denied` even with the order + shipping scope on, so Sapo's own zones are unreachable by a private app. The three zones and the free-shipping threshold in `lib/shipping.ts` are placeholders with a defensible shape; **they are the shop's numbers to set.**
+- **The province list is Sapo's 63-province set**, which predates Vietnam's 2025 mergers. That is deliberate: an order is only useful if Sapo accepts the address on it, so the lists the customer picks from have to be the lists Sapo knows.
+- **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
+- Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - One entry per Sapo product (the first variant by `position`): a product with real options would need a variant picker. Max 10 per line, max 20 lines.
 
 ## Next steps (not in MVP)
 
 1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
-2. VNPAY `querydr` reconciliation job for orders stuck in `pending`/`sapo_error`.
+2. ~~VNPAY `querydr` reconciliation~~ — done as a read-only script (`npm run querydr`). Remaining: an automatic job, which needs an index of pending references (the store has no key scan) and a decision about who may trigger a write.
 3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker. (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
 4. ~~Composable product descriptions from a CMS~~ — done (T1, `docs/plan/T1-product-content.md`), and so is the Sanity webhook → `/api/revalidate` (see "Staying on Sanity's free plan").
 5. Blog on Sanity — planned in `docs/plan/T2-blog.md`, reuses the same block array and `BlockRenderer`.
-6. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
+6. T7 remainders, in the order they bite: a **refund path** (there is none, not even a documented manual one); a **variant picker**, still the one thing the catalog cannot express; **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
+7. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

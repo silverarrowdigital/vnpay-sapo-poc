@@ -396,7 +396,11 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
       // No source_name: Sapo reserves values like "web"/"pos" for its own channels and rejects
       // a private app that sets one (HTTP 422 "cannot be set to a protected value by an
       // untrusted API client"). The order is identified by its tags and note_attributes instead.
-      send_receipt: false,
+      // Sapo's own order-confirmation email, off unless the shop asked for it (SAPO_SEND_RECEIPT).
+      // Until T7.6 this was hardcoded false, which meant a customer who closed the tab had nothing
+      // at all; it is now a switch the shop owns. The fulfilment notice stays off — that one
+      // belongs to whoever actually ships the parcel.
+      send_receipt: cfg.sendReceipt,
       send_fulfillment_receipt: false,
     },
   };
