@@ -12,7 +12,9 @@ import { errorMessage, log } from "./log";
 import { resolveAddress } from "./locations";
 import {
   MAX_CART_LINES,
+  MAX_COD_TOTAL_VND,
   MAX_QUANTITY,
+  formatVnd,
   isSoldOut,
   maxOrderableQuantity,
   type CartLine,
@@ -278,6 +280,17 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
     provinceId: address.provinceId,
     discountCode: input.discountCode,
   });
+
+  // The COD ceiling is tested on the **final** total, after discount and delivery, because that is
+  // the sum the courier would have to collect and the sum the shop is exposed to if nobody is home.
+  // Checked here rather than in the route: it depends on numbers only this function has resolved.
+  if (input.paymentMethod === "cod" && totals.totalVnd > MAX_COD_TOTAL_VND) {
+    throw new CheckoutError(
+      `Đơn hàng trên ${formatVnd(MAX_COD_TOTAL_VND)} không áp dụng thanh toán khi nhận hàng. Vui lòng thanh toán qua VNPAY.`,
+      409,
+      { paymentMethod: "Đơn quá lớn để thu khi nhận hàng" },
+    );
+  }
 
   const store = getOrderStore();
 
@@ -693,18 +706,35 @@ export const RATE_POLICIES = {
   checkout: { limit: 10, windowSeconds: 600 },
   discount: { limit: 20, windowSeconds: 600 },
   lookup: { limit: 10, windowSeconds: 900 },
+  /**
+   * COD, per IP — tighter than `checkout` because the two paths are not symmetric: card spam costs
+   * the spammer money before it costs the shop anything, while a COD request creates a real order
+   * and moves real stock for free.
+   */
+  cod: { limit: 3, windowSeconds: 600 },
+  /**
+   * COD, per phone number — the axis an IP limit misses entirely, since IPs rotate and a mobile
+   * network puts many real customers behind one.
+   *
+   * Deliberately **COD only**. Counting card checkouts here would lock out the customer whose card
+   * keeps failing and who is retrying in good faith — the opposite of who this is for.
+   */
+  codPhone: { limit: 5, windowSeconds: 3600 },
 } as const satisfies Record<string, RatePolicy>;
 
 /**
  * Count one request and say whether it is over the line.
  *
+ * `key` is whatever axis the policy limits: an IP for most, a phone number for `codPhone`. The
+ * store just counts strings, so adding an axis costs a policy and a call rather than a mechanism.
+ *
  * Fails **open**: a store that cannot be reached must not take checkout down with it. A rate limit
  * is a guard against nuisance, and trading away the ability to sell to keep it is the wrong trade.
  */
-export async function overRateLimit(kind: keyof typeof RATE_POLICIES, ip: string): Promise<boolean> {
+export async function overRateLimit(kind: keyof typeof RATE_POLICIES, key: string): Promise<boolean> {
   const policy = RATE_POLICIES[kind];
   try {
-    const count = await getOrderStore().hit(`${kind}:${ip}`, policy.windowSeconds);
+    const count = await getOrderStore().hit(`${kind}:${key}`, policy.windowSeconds);
     if (count > policy.limit) {
       log.warn("rate.limited", { kind, count, limit: policy.limit });
       return true;
@@ -724,6 +754,15 @@ export type OrderLookupResult =
   | { outcome: "found"; order: SapoOrderDetail; paymentMethod: PaymentMethod }
   | { outcome: "not_found" }
   | { outcome: "rate_limited" };
+
+/**
+ * The last 9 digits of a phone number, which is the part that identifies it: +84912345678,
+ * 84912345678 and 0912345678 all reduce to the same key, so a rate limit on one form cannot be
+ * sidestepped by typing another.
+ */
+export function phoneRateKey(phone: string): string {
+  return phone.replace(/D+/g, "").slice(-9);
+}
 
 /** Compare the last 9 digits, so +84 / 84 / 0 prefixes of the same number match. */
 function samePhone(a: string, b: string): boolean {

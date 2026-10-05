@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MissingEnvError } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
-import { CheckoutError, overRateLimit, startCheckout, validateCheckout } from "@/lib/order";
+import { CheckoutError, overRateLimit, phoneRateKey, startCheckout, validateCheckout } from "@/lib/order";
 import { normaliseIp } from "@/lib/vnpay";
 
 export const runtime = "nodejs";
@@ -27,6 +27,25 @@ export async function POST(request: NextRequest) {
   // customer fixing a typo, so it sits here — after the shape is known good, before Sapo is called.
   if (await overRateLimit("checkout", ip)) {
     return NextResponse.json({ error: "Bạn thao tác quá nhanh. Vui lòng thử lại sau vài phút." }, { status: 429 });
+  }
+
+  // COD gets two more counters, on two different axes, because it is the only path where a request
+  // produces a real order and moves real stock without any money arriving. One by IP, tighter than
+  // the shared limit above; one by phone number, which is the axis an IP limit misses — IPs rotate,
+  // and a mobile network puts many genuine customers behind a single one.
+  if (result.value.paymentMethod === "cod") {
+    if (await overRateLimit("cod", ip)) {
+      return NextResponse.json(
+        { error: "Bạn đã đặt nhiều đơn COD liên tiếp. Vui lòng chờ ít phút hoặc thanh toán qua VNPAY." },
+        { status: 429 },
+      );
+    }
+    if (await overRateLimit("codPhone", phoneRateKey(result.value.phone))) {
+      return NextResponse.json(
+        { error: "Số điện thoại này đã đặt nhiều đơn COD trong một giờ. Vui lòng thanh toán qua VNPAY." },
+        { status: 429 },
+      );
+    }
   }
 
   try {

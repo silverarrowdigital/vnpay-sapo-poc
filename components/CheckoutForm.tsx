@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { MAX_QUANTITY, formatVnd, maxOrderableQuantity, type CatalogProduct } from "@/lib/product";
+import {
+  MAX_COD_TOTAL_VND,
+  MAX_QUANTITY,
+  formatVnd,
+  maxOrderableQuantity,
+  type CatalogProduct,
+} from "@/lib/product";
 import AddressSelects, { type AddressSelection } from "./AddressSelects";
 import { FIELD_CLASS, FIELD_ERROR_CLASS } from "./formField";
 import { useCart } from "./useCart";
@@ -68,6 +74,13 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
   // implies a chosen district wherever Sapo still has one. Requiring districtId here would block
   // checkout on a two-tier province, which is the case this is meant to survive.
   const addressComplete = address.provinceId !== undefined && address.wardId !== undefined;
+
+  // COD is capped on the final total. Derived rather than corrected in an effect: if the basket
+  // grows past the ceiling while COD is selected, `payWith` falls back to card on the spot — no
+  // cascading render, and no window where the button says COD and the request asks for something
+  // else. The server enforces the same ceiling; this only saves the customer a refused submit.
+  const codAllowed = quote === undefined || quote.totalVnd <= MAX_COD_TOTAL_VND;
+  const payWith: PaymentMethod = codAllowed ? method : "vnpay";
   const canPay = rows.length > 0 && !hasUnavailable && addressComplete;
 
   /** The cart as the API wants it: quantities only. */
@@ -160,7 +173,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           provinceId: address.provinceId,
           districtId: address.districtId,
           wardId: address.wardId,
-          paymentMethod: method,
+          paymentMethod: payWith,
           // A code, never an amount: the server decides what it is worth.
           discountCode: appliedCode,
           // Quantities only. Sending a price would be ignored: the server prices from Sapo.
@@ -211,7 +224,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
   }
 
   const payLabel =
-    method === "cod"
+    payWith === "cod"
       ? quote !== undefined
         ? `Đặt hàng — thu ${formatVnd(quote.totalVnd)} khi nhận`
         : "Đặt hàng (thanh toán khi nhận)"
@@ -283,29 +296,39 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           {(
             [
               { id: "vnpay", title: "Thẻ / Chuyển khoản qua VNPAY", hint: "Trả trước, đơn được xác nhận ngay." },
-              { id: "cod", title: "Thanh toán khi nhận hàng (COD)", hint: "Trả tiền mặt cho người giao hàng." },
+              {
+                id: "cod",
+                title: "Thanh toán khi nhận hàng (COD)",
+                hint: `Trả tiền mặt cho người giao hàng. Áp dụng cho đơn đến ${formatVnd(MAX_COD_TOTAL_VND)}.`,
+              },
             ] as const
-          ).map((option) => (
-            <label
-              key={option.id}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 ${
-                method === option.id ? "border-ink" : "border-line"
-              }`}
-            >
-              <input
-                type="radio"
-                name="paymentMethod"
-                value={option.id}
-                checked={method === option.id}
-                onChange={() => setMethod(option.id)}
-                className="mt-1"
-              />
-              <span>
-                <span className="block text-sm">{option.title}</span>
-                <span className="block text-xs text-ink-soft">{option.hint}</span>
-              </span>
-            </label>
-          ))}
+          ).map((option) => {
+            const disabled = option.id === "cod" && !codAllowed;
+            return (
+              <label
+                key={option.id}
+                className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+                  disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+                } ${payWith === option.id ? "border-ink" : "border-line"}`}
+              >
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  value={option.id}
+                  checked={payWith === option.id}
+                  disabled={disabled}
+                  onChange={() => setMethod(option.id)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block text-sm">{option.title}</span>
+                  <span className="block text-xs text-ink-soft">
+                    {disabled ? `Đơn này vượt ${formatVnd(MAX_COD_TOTAL_VND)} — hãy thanh toán qua VNPAY.` : option.hint}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
         </div>
 
         {formError && (
@@ -319,7 +342,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           disabled={submitting || !canPay}
           className="mt-6 w-full cursor-pointer rounded-full border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? (method === "cod" ? "Đang tạo đơn…" : "Đang chuyển tới VNPAY…") : payLabel}
+          {submitting ? (payWith === "cod" ? "Đang tạo đơn…" : "Đang chuyển tới VNPAY…") : payLabel}
         </button>
         {!addressComplete && rows.length > 0 && (
           <p className="mt-3 text-center text-xs text-ink-soft">

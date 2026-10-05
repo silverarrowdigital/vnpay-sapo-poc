@@ -19,6 +19,18 @@ export const PRODUCT = {
 export const MAX_QUANTITY = 10;
 
 /**
+ * Hard ceiling on what cash on delivery may be used for.
+ *
+ * COD is the one path where a request creates a real Sapo order and moves real stock without any
+ * money arriving, so the exposure of a single abusive order is capped here rather than left to the
+ * rate limits alone. A card payment needs no ceiling: it costs the payer before it costs the shop.
+ *
+ * **This is the shop's number**, like the delivery fees in lib/shipping.ts — raise it or lower it
+ * here and nothing else changes. Above it the customer is asked to pay by card, not refused a sale.
+ */
+export const MAX_COD_TOTAL_VND = 3_000_000;
+
+/**
  * Hard ceiling on distinct lines in a cart. A crafted request could otherwise ask us to price an
  * unbounded number of lines, and the Sapo order would be just as unbounded.
  */
