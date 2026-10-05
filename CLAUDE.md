@@ -87,6 +87,7 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/auto-ipn.mjs` | Dev/recovery: find that callback in the dev log by itself (`--watch` to follow) |
 | `scripts/fetch-reference.mjs` | Dev-only: re-download the UI reference into `design/reference/site/` |
 | `scripts/check-revalidate.mjs` | Dev-only: four signed/unsigned requests at `/api/revalidate`, checking what the signature guard actually refuses |
+| `scripts/check-locations.mjs` | Watch Sapo's province/district/ward tables for Vietnam's 2025 reorganisation. Read-only; exits non-zero when the shape changes |
 | `scripts/querydr.mjs` | Ask VNPAY what really happened to a transaction (API 2.1.0 `querydr`). Read-only; prints the one command that would finish the order |
 | `design/TOKENS.md` | Where every design token came from, with its source |
 | `docs/huong-dan-them-san-pham.md` | Shop-owner guide (Vietnamese, no CLI): add a Sapo product, then its Sanity content. Written for someone who is not a developer |
@@ -237,6 +238,39 @@ delivery 25,000:
 - **Stock moves on a COD order too** (115 → 114 on a quantity of 1), because the line carries a
   `variant_id` and the payload sends `inventory_behaviour`. That is right for COD — the goods are
   committed — but it means **a cancelled COD order needs a manual restock**.
+**Sapo's administrative divisions are the pre-2025 map, and the table is an accretion rather than a
+snapshot.** Verified 2026-10-05, and it decides how addresses work:
+
+- **63 provinces, 723 districts, 11,665 wards.** Vietnam's 2025 reorganisation cut the country to 34
+  provinces and **abolished the district level**; Sapo has not followed. Every province the reform
+  merged away is still selectable — Bình Dương(10), Bà Rịa-Vũng Tàu(4), Hà Nam(25), Nam Định(40),
+  Ninh Bình(42), Bắc Kạn(6), Hậu Giang(29), Vĩnh Phúc(62) — and so are `Quận 1`(30) and
+  `Phường Đa Kao`(9218), both of which no longer exist in law.
+- **Sapo does add new units; it just never removes the old ones.** `Thành phố Hoa Lư`(10928),
+  `Quận Thuận Hoá`(10930), `Quận Phú Xuân`(10933), `Thị xã Phong Điền`(10934) are 2025 creations
+  and are all present, as is `Huyện Long Đất`(10929) — the merger of Long Điền and Đất Đỏ — **beside
+  `Huyện Long Điền`(67) and `Huyện Đất Đỏ`(68), which it replaced.** `Huyện Tân Thành`(69) still
+  sits next to `Thị xã Phú Mỹ`(716), carved out of it in 2018. So in this table a *rising* count is
+  a normal update and a *falling* one is the alarm.
+- **Mirroring Sapo stays the right call**, however out of date it looks: an order is only useful if
+  Sapo accepts the address on it, and a more correct dataset would produce addresses Sapo does not
+  know. A stored order also keeps the names it was placed with — the record has to say where it was
+  actually sent, not where that place is called today.
+- **Every ward carries `province_id` as well as `district_id`** (11,665 of 11,665, 63 distinct
+  provinces). That is what makes the two-tier fallback possible with no second data source.
+- **`npm run check:locations`** prints the three counts against a recorded baseline and shouts when
+  the shape changes — a province with no districts, a ward with no district, a *shrinking* table.
+  Run it when an address looks wrong, and after any Sapo announcement about the reform.
+
+**The two-tier fallback, and the gate on it.** `listWardsByProvince` and
+`/api/locations?level=province-wards` serve a province's wards without going through a district, and
+`AddressSelects` hides the district select for a province that has none. Without that branch, the
+day Sapo drops the level is the day checkout dead-ends on an empty dropdown with a disabled button —
+no error, no log, no sales. **`resolveAddress` accepts a missing district only when Sapo genuinely
+has no districts for that province**, never merely because the request left the field out; otherwise
+dropping `districtId` would be a way to skip the containment check. Verified: province 2 + ward
+9219 with no district → 400, while province 4 returns its 104 wards through the province path.
+
 - **A variant's `inventory_quantity` is "có thể bán" (available), not "tồn kho" (on hand).** Verified
   2026-10-05: the admin showed on hand 119 and available 114 for `TEST-005` while the API returned
   `inventory_quantity: 114`; the gap was exactly the 5 units committed by open, unfulfilled order
@@ -298,6 +332,14 @@ Holds how a product is *presented* (and, from T2, the blog). Never price, never 
   Studio-created documents get a UUID, which has no dots, so **this only bites ids assigned by hand** (`sanity documents create`, migrations, seed scripts). Use a dash.
 
   Drafts stay private either way: `drafts.<id>` has a dot, so the same grant excludes it — which is also why `perspective: "published"` is belt and braces rather than the only guard.
+- **A `globalThis` cache survives a module reload, so it outlives the shape it was built for.**
+  `lib/locations.ts` memoises the three tables on `globalThis` (1 hour) so a save does not
+  re-download 1.2 MB of wards. The key carries a **shape version** (`__vnpaySapoLocations_v2`) and it
+  has to be bumped whenever a mapped row changes. Hit for real while building the two-tier fallback:
+  `Ward` gained `provinceId`, the cached rows had been built without it, and
+  `listWardsByProvince` returned **zero** wards for every province — no error, no warning, just an
+  empty dropdown. Production never sees it (a new deployment is a new process), which is precisely
+  why only someone mid-edit would ever find it. Same class as the stale `unstable_cache` entry below.
 - **In development, a stale `unstable_cache` entry survives a server restart.** Hit for real: the product page was queried before the token existed, cached `null` for its 300 s window, and then kept serving `null` across two full `next dev` restarts — the fix was `rm -rf .next`. `.next/cache` showed only `turbopack`, so the entry is not where you would look for it. When CMS content does not appear after an env or content change, clear `.next` before suspecting the query.
 - Studio is **hosted** (`npm run studio:deploy` → `*.sanity.studio`), not embedded. That keeps `sanity` a devDependency out of the Next build and lets the "no `NEXT_PUBLIC_`" rule stand. `sanity.config.ts` sits at the repo root because the CLI resolves it from the working directory; the schemas are in `sanity/schemas/`.
 - One `productContent` document per product, enforced at edit time by an async uniqueness check on `sapoProductId` (a draft and its published version are not duplicates of each other). Two documents would make which one renders arbitrary.
@@ -420,6 +462,11 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
   must be refused — `?query=T` matches `TEST10` server-side, so accepting it would be the fuzzy-search
   trap reopening. Verified 2026-10-05: `T` → refused, `test10` → `TEST10` −26,800.
 - **COD end to end, locally:** POST the full checkout body with `"paymentMethod":"cod"`. It needs no VNPAY config and no tunnel, and it creates a **real** Sapo order immediately — the fastest way to check a payload change, and the way #1025 was verified. Delete that one order afterwards by its id.
+- **Addresses:** `npm run check:locations` for the shape of Sapo's tables. The three gates worth
+  re-testing after any change to `lib/locations.ts`, all of which must answer **400**: a ward that
+  belongs to another district; a district that belongs to another province; and **a missing
+  `districtId` for a province that still has districts** — that last one is the gate on the two-tier
+  path, and losing it would let a forged request skip the containment check entirely.
 - **Order lookup:** `/tra-cuu-don` with the reference and the phone number on the order. A wrong phone must answer exactly like an unknown reference; if it ever differs, the page has become an oracle.
 - **Stuck order:** `npm run querydr -- <txnRef>` asks VNPAY what really happened. Read-only. Verified live 2026-10-05 against a real past transaction (`00`/`00`, NCB, 1,340,000đ, matching order #1024). Its checksum is **nine values joined with `|`** in a fixed order, not the sorted `key=value` of the payment URL — signing it the payment way gives a well-formed request that answers `97`.
 
@@ -469,7 +516,8 @@ The dev log is `.next/dev/logs/next-development.log`. Next 16 wraps our JSON ins
 - **`once_per_customer` on a discount rule cannot be enforced.** There are no customer accounts, so a code marked once-per-customer is accepted and logged (`discount.once_per_customer_unenforced`) rather than refused. The exposure is one extra discount per reuse and it is visible in Sapo; refusing every such code would be worse.
 - **A discount rule whose conditions we cannot evaluate is refused outright** — entitled products/variants/collections/provinces, customer groups, saved searches, locations, buy-X-get-Y ratios, a non-`all` customer selection, or a shipping-target rule. The customer is told the code has a condition the site cannot apply. Honouring the parts we understand would charge a discount the shop never offered.
 - **The delivery fee is a flat table, not a carrier quote.** `GET /admin/shipping_zones.json` answers `access_denied` even with the order + shipping scope on, so Sapo's own zones are unreachable by a private app. The three zones and the free-shipping threshold in `lib/shipping.ts` are placeholders with a defensible shape; **they are the shop's numbers to set.**
-- **The province list is Sapo's 63-province set**, which predates Vietnam's 2025 mergers. That is deliberate: an order is only useful if Sapo accepts the address on it, so the lists the customer picks from have to be the lists Sapo knows.
+- **The province list is Sapo's 63-province set**, which predates Vietnam's 2025 mergers. That is deliberate: an order is only useful if Sapo accepts the address on it, so the lists the customer picks from have to be the lists Sapo knows. A customer can therefore pick a unit that no longer exists in law (`Quận 1`, `Phường Đa Kao`), and the order records it; couriers still accept the old names through the transition.
+- **Nothing checks the free-text street line against the three levels chosen.** A customer can select Bà Rịa-Vũng Tàu correctly and type "63 Đinh Tiên Hoàng, Quận 1" into the address field; the order is accepted and the delivery fee charged is Vũng Tàu's. The cross-level combination is impossible (two layers refuse it) but a contradictory *street* is not detectable without an address-validation or geocoding service — which is why a COD order should be confirmed by phone. Same for a wrong-but-consistent address: the fee follows the province chosen, so the shop absorbs the difference if the real destination is in another zone.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - One entry per Sapo product (the first variant by `position`): a product with real options would need a variant picker. Max 10 per line, max 20 lines.

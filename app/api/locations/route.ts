@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { errorMessage, log } from "@/lib/log";
-import { listDistricts, listProvinces, listWards } from "@/lib/locations";
+import { listDistricts, listProvinces, listWards, listWardsByProvince } from "@/lib/locations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +34,13 @@ export async function GET(request: NextRequest) {
     }
     if (level === "wards") {
       return cached({ wards: await listWards(parentId) });
+    }
+    // Wards of a whole province, for the day Sapo drops the district level (Vietnam's 2025
+    // reorganisation). A separate `level` rather than letting `parentId` mean either a district or
+    // a province depending on context: a number whose meaning depends on the caller's intent is
+    // exactly the kind of parameter that gets passed the wrong id a year from now.
+    if (level === "province-wards") {
+      return cached({ wards: await listWardsByProvince(parentId) });
     }
     return NextResponse.json({ error: "level không hợp lệ" }, { status: 400 });
   } catch (err) {

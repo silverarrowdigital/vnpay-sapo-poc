@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FIELD_CLASS, FIELD_ERROR_CLASS } from "./formField";
 
-/** The three ids the checkout needs. `undefined` until the customer has picked that level. */
+/** The ids the checkout needs. `districtId` stays absent where Sapo has no district level. */
 export interface AddressSelection {
   provinceId?: number;
   districtId?: number;
@@ -15,12 +15,12 @@ interface Row {
   name: string;
 }
 
-/** A child list together with the parent id it was fetched for. */
-type Loaded = { parentId: number; rows: Row[] } | undefined;
+/** A child list together with the parent it was fetched for. */
+type Loaded = { key: string; rows: Row[] } | undefined;
 
 /**
- * Tỉnh/thành → quận/huyện → phường/xã, the three levels a Vietnamese address needs and no courier
- * will accept an order without.
+ * Tỉnh/thành → quận/huyện → phường/xã, the levels a Vietnamese address needs and no courier will
+ * accept an order without.
  *
  * Each level is fetched when its parent is chosen, never all at once: the ward table is 11,665 rows
  * and about 1.2 MB, so `/api/locations` refuses to serve it unprefiltered and this component asks
@@ -31,8 +31,15 @@ type Loaded = { parentId: number; rows: Row[] } | undefined;
  * wrong place, and while the server refuses that pairing outright, the customer would be told their
  * address is invalid without being shown which part.
  *
- * If the lists cannot be loaded the component says so and the submit button stays disabled,
- * because three empty dropdowns look like a broken page and silently drop the address.
+ * **Two-tier provinces.** Vietnam's 2025 reorganisation abolishes the district level. Sapo has not
+ * followed (63 provinces, 723 districts, verified 2026-10-05) so today every province has one, but
+ * when a province comes back with **no districts** this component drops that step: it hides the
+ * select and asks for the province's wards directly. Without that branch, the day Sapo switches is
+ * the day the form dead-ends on an empty dropdown with a disabled button — no error, no log, no
+ * sales. The server still decides whether skipping the level was legitimate.
+ *
+ * If the lists cannot be loaded at all the component says so, because three empty dropdowns look
+ * like a broken page and silently drop the address.
  */
 export default function AddressSelects({
   value,
@@ -44,18 +51,30 @@ export default function AddressSelects({
   errors?: { provinceId?: string; districtId?: string; wardId?: string };
 }) {
   const [provinces, setProvinces] = useState<Row[]>([]);
-  // Each child list is stored **with the parent it belongs to**, and read back only when that
-  // parent is still the chosen one. Clearing it from an effect would be a synchronous setState in
-  // an effect body (a cascading render, and a lint error); deriving it means the list of the
-  // previous province can never flash under the new one.
   const [districts, setDistricts] = useState<Loaded>(undefined);
   const [wards, setWards] = useState<Loaded>(undefined);
   const [failed, setFailed] = useState(false);
 
-  // Both halves of each test must be present: with nothing loaded and nothing chosen, `?.parentId`
-  // and the id would both be undefined, compare equal, and read `rows` off undefined.
-  const districtRows = districts !== undefined && districts.parentId === value.provinceId ? districts.rows : [];
-  const wardRows = wards !== undefined && wards.parentId === value.districtId ? wards.rows : [];
+  const provinceKey = value.provinceId === undefined ? "" : `p:${value.provinceId}`;
+  const districtsReady = districts !== undefined && districts.key === provinceKey;
+  const districtRows = districtsReady ? districts.rows : [];
+
+  // Known only once the district list for this province has actually arrived: an empty list before
+  // then means "not loaded", not "no districts".
+  const hasDistricts = districtsReady ? districtRows.length > 0 : undefined;
+
+  // Which parent the wards hang off. Undefined means "not ready to ask yet". Memoised so the fetch
+  // effect can depend on the object itself: rebuilt every render, it would refetch every render.
+  const wardParent = useMemo(
+    () =>
+      value.districtId !== undefined
+        ? { level: "wards", id: value.districtId, key: `d:${value.districtId}` }
+        : hasDistricts === false && value.provinceId !== undefined
+          ? { level: "province-wards", id: value.provinceId, key: `pw:${value.provinceId}` }
+          : undefined,
+    [value.districtId, value.provinceId, hasDistricts],
+  );
+  const wardRows = wards !== undefined && wardParent !== undefined && wards.key === wardParent.key ? wards.rows : [];
 
   useEffect(() => {
     let active = true;
@@ -72,8 +91,6 @@ export default function AddressSelects({
     };
   }, []);
 
-  // One effect per level, each keyed on its parent id, so a fast double-change cannot leave the
-  // list of one province showing under another (the `active` flag drops the late response).
   useEffect(() => {
     const parentId = value.provinceId;
     if (parentId === undefined) return;
@@ -81,7 +98,7 @@ export default function AddressSelects({
     fetch(`/api/locations?level=districts&parentId=${parentId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((j: { districts?: Row[] }) => {
-        if (active) setDistricts({ parentId, rows: j.districts ?? [] });
+        if (active) setDistricts({ key: `p:${parentId}`, rows: j.districts ?? [] });
       })
       .catch(() => {
         if (active) setFailed(true);
@@ -92,13 +109,13 @@ export default function AddressSelects({
   }, [value.provinceId]);
 
   useEffect(() => {
-    const parentId = value.districtId;
-    if (parentId === undefined) return;
+    if (wardParent === undefined) return;
+    const { level, id, key } = wardParent;
     let active = true;
-    fetch(`/api/locations?level=wards&parentId=${parentId}`)
+    fetch(`/api/locations?level=${level}&parentId=${id}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((j: { wards?: Row[] }) => {
-        if (active) setWards({ parentId, rows: j.wards ?? [] });
+        if (active) setWards({ key, rows: j.wards ?? [] });
       })
       .catch(() => {
         if (active) setFailed(true);
@@ -106,12 +123,15 @@ export default function AddressSelects({
     return () => {
       active = false;
     };
-  }, [value.districtId]);
+    // One effect covers both the district path and the province path.
+  }, [wardParent]);
 
   const pick = (raw: string): number | undefined => {
     const n = Number(raw);
     return Number.isSafeInteger(n) && n > 0 ? n : undefined;
   };
+
+  const wardDisabled = wardParent === undefined;
 
   return (
     <>
@@ -137,28 +157,33 @@ export default function AddressSelects({
         {errors?.provinceId && <span className={FIELD_ERROR_CLASS}>{errors.provinceId}</span>}
       </div>
 
-      <div>
-        <label htmlFor="districtId" className="mb-1 block text-xs tracking-wide uppercase">
-          Quận / Huyện
-        </label>
-        <select
-          id="districtId"
-          name="districtId"
-          required
-          disabled={value.provinceId === undefined}
-          className={`${FIELD_CLASS} disabled:opacity-50`}
-          value={value.districtId ?? ""}
-          onChange={(e) => onChange({ provinceId: value.provinceId, districtId: pick(e.target.value) })}
-        >
-          <option value="">{value.provinceId === undefined ? "— Chọn tỉnh/thành trước —" : "— Chọn quận/huyện —"}</option>
-          {districtRows.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
+      {/* Hidden entirely where Sapo has no district level for the chosen province. */}
+      {hasDistricts !== false && (
+        <div>
+          <label htmlFor="districtId" className="mb-1 block text-xs tracking-wide uppercase">
+            Quận / Huyện
+          </label>
+          <select
+            id="districtId"
+            name="districtId"
+            required
+            disabled={value.provinceId === undefined}
+            className={`${FIELD_CLASS} disabled:opacity-50`}
+            value={value.districtId ?? ""}
+            onChange={(e) => onChange({ provinceId: value.provinceId, districtId: pick(e.target.value) })}
+          >
+            <option value="">
+              {value.provinceId === undefined ? "— Chọn tỉnh/thành trước —" : "— Chọn quận/huyện —"}
             </option>
-          ))}
-        </select>
-        {errors?.districtId && <span className={FIELD_ERROR_CLASS}>{errors.districtId}</span>}
-      </div>
+            {districtRows.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          {errors?.districtId && <span className={FIELD_ERROR_CLASS}>{errors.districtId}</span>}
+        </div>
+      )}
 
       <div>
         <label htmlFor="wardId" className="mb-1 block text-xs tracking-wide uppercase">
@@ -168,14 +193,20 @@ export default function AddressSelects({
           id="wardId"
           name="wardId"
           required
-          disabled={value.districtId === undefined}
+          disabled={wardDisabled}
           className={`${FIELD_CLASS} disabled:opacity-50`}
           value={value.wardId ?? ""}
           onChange={(e) =>
             onChange({ provinceId: value.provinceId, districtId: value.districtId, wardId: pick(e.target.value) })
           }
         >
-          <option value="">{value.districtId === undefined ? "— Chọn quận/huyện trước —" : "— Chọn phường/xã —"}</option>
+          <option value="">
+            {wardDisabled
+              ? value.provinceId === undefined
+                ? "— Chọn tỉnh/thành trước —"
+                : "— Chọn quận/huyện trước —"
+              : "— Chọn phường/xã —"}
+          </option>
           {wardRows.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}

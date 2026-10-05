@@ -54,7 +54,12 @@ export interface CheckoutInput {
   /** Street line only; the three administrative levels arrive as ids and are resolved from Sapo. */
   address: string;
   provinceId: number;
-  districtId: number;
+  /**
+   * Absent when Sapo has no district level for the chosen province — the two-tier shape Vietnam's
+   * 2025 reorganisation moves to. Leaving it out is **not** a way to skip the containment check:
+   * `resolveAddress` refuses a missing district whenever Sapo still has one for that province.
+   */
+  districtId?: number;
   wardId: number;
   /** What the browser asked for. Quantities only — every price is resolved in startCheckout. */
   lines: CartLine[];
@@ -130,8 +135,9 @@ export function validateCheckout(body: unknown): ValidationResult {
   const districtId = readId(b.districtId);
   const wardId = readId(b.wardId);
   if (provinceId === undefined) errors.provinceId = "Hãy chọn tỉnh/thành phố";
-  if (districtId === undefined) errors.districtId = "Hãy chọn quận/huyện";
   if (wardId === undefined) errors.wardId = "Hãy chọn phường/xã";
+  // districtId is deliberately not required here. Whether it may be absent depends on Sapo's own
+  // tables for that province, which this synchronous function cannot read; resolveAddress decides.
 
   const rawMethod = str("paymentMethod") || "vnpay";
   if (rawMethod !== "vnpay" && rawMethod !== "cod") errors.paymentMethod = "Hãy chọn cách thanh toán";
@@ -156,7 +162,7 @@ export function validateCheckout(body: unknown): ValidationResult {
       email,
       address,
       provinceId: provinceId as number,
-      districtId: districtId as number,
+      districtId,
       wardId: wardId as number,
       lines: cart.lines,
       discountCode,

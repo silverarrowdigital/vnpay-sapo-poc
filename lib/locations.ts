@@ -41,16 +41,27 @@ export interface Ward {
   name: string;
   code: string;
   districtId: number;
+  /**
+   * Every ward row carries its province as well as its district (verified live). That is what
+   * makes the two-tier fallback below possible without a second data source.
+   */
+  provinceId: number;
 }
 
-/** What a validated address contributes to the Sapo order payload. */
+/**
+ * What a validated address contributes to the Sapo order payload.
+ *
+ * The district is **optional** because Vietnam's 2025 reorganisation abolishes that level. Sapo has
+ * not followed yet — it still serves 63 provinces and 723 districts (verified 2026-10-05) — but
+ * when it does, an address will be province + ward and this shape already allows it.
+ */
 export interface ResolvedAddress {
   province: string;
   provinceCode: string;
   provinceId: number;
-  district: string;
-  districtCode: string;
-  districtId: number;
+  district?: string;
+  districtCode?: string;
+  districtId?: number;
   ward: string;
   wardCode: string;
   wardId: number;
@@ -66,6 +77,7 @@ interface RawDistrict extends RawProvince {
 }
 interface RawWard extends RawProvince {
   district_id?: number;
+  province_id?: number;
 }
 
 /** A row with no id or no name cannot be chosen or recorded, so it is dropped rather than shown. */
@@ -82,15 +94,24 @@ interface CachedTable<T> {
 /**
  * Kept on globalThis so `next dev`'s module reloads do not re-download 1.2 MB of wards on every
  * save — the same reason lib/store.ts keeps its Map there.
+ *
+ * **The number in the key is a shape version, and it has to be bumped whenever a row's mapped shape
+ * changes.** A module reload re-runs this file but does not clear globalThis, so rows built by the
+ * previous version of the mapper survive the edit that changed them. Hit for real while adding the
+ * two-tier fallback: `Ward` gained `provinceId`, the cached rows had been built without it, and
+ * `listWardsByProvince` quietly returned **zero** wards for every province — no error, no warning,
+ * just an empty dropdown. It is the same class of trap as a stale `unstable_cache` entry outliving
+ * a deploy (see CLAUDE.md). Production is immune — a new deployment is a new process — which is
+ * exactly why it would only ever be found by someone mid-edit.
  */
 const g = globalThis as typeof globalThis & {
-  __vnpaySapoLocations?: {
+  __vnpaySapoLocations_v2?: {
     provinces?: CachedTable<Province>;
     districts?: CachedTable<District>;
     wards?: CachedTable<Ward>;
   };
 };
-const cache = (g.__vnpaySapoLocations ??= {});
+const cache = (g.__vnpaySapoLocations_v2 ??= {});
 
 function fresh<T>(entry: CachedTable<T> | undefined): T[] | undefined {
   if (entry === undefined) return undefined;
@@ -134,12 +155,15 @@ async function loadWards(): Promise<Ward[]> {
   const cfg = getSapoConfig();
   const data = (await sapoGet(cfg, "/admin/wards.json")) as { wards?: RawWard[] };
   const rows = (data.wards ?? [])
-    .filter((w) => usable(w) && typeof w.district_id === "number")
+    .filter((w) => usable(w) && typeof w.province_id === "number")
     .map((w) => ({
       id: w.id as number,
       name: w.name as string,
       code: String(w.code ?? w.id),
-      districtId: w.district_id as number,
+      // -1 for a ward with no district: unreachable through the district path, which is what a
+      // two-tier row should be. It is never compared against a real id.
+      districtId: typeof w.district_id === "number" ? w.district_id : -1,
+      provinceId: w.province_id as number,
     }));
   cache.wards = { rows, readAt: Date.now() };
   log.info("locations.loaded", { table: "wards", rows: rows.length });
@@ -162,6 +186,34 @@ export async function listWards(districtId: number): Promise<Ward[]> {
 }
 
 /**
+ * Wards of a province, ignoring the district level entirely.
+ *
+ * This is the two-tier path. Vietnam's 2025 reorganisation abolishes the district level, and the
+ * day Sapo follows, `listDistricts` will return an empty list for a province and the three-step
+ * cascade would dead-end: an empty dropdown the customer cannot get past, with nothing logged and
+ * nothing to see but a disabled button. Sales would stop silently.
+ *
+ * Sapo has **not** followed yet (63 provinces, 723 districts, every ward carrying a `district_id`,
+ * verified 2026-10-05), so today this returns the same wards the district path would, just
+ * unfiltered by district. It exists so the switch, whenever it comes, costs nothing.
+ */
+export async function listWardsByProvince(provinceId: number): Promise<Ward[]> {
+  return (await loadWards()).filter((w) => w.provinceId === provinceId).sort(byName);
+}
+
+/**
+ * Does Sapo still know a district level for this province?
+ *
+ * This is the gate on the two-tier path, and it is a security check rather than a convenience. A
+ * request may omit the district **only** when Sapo genuinely has none for that province — otherwise
+ * a forged request could drop `districtId` and skip the containment check that keeps a ward from
+ * being attached to the wrong district.
+ */
+export async function provinceHasDistricts(provinceId: number): Promise<boolean> {
+  return (await loadDistricts()).some((d) => d.provinceId === provinceId);
+}
+
+/**
  * Turn three ids from the browser into the names and codes Sapo wants, refusing anything that
  * does not hang together.
  *
@@ -172,16 +224,36 @@ export async function listWards(districtId: number): Promise<Ward[]> {
  */
 export async function resolveAddress(
   provinceId: number,
-  districtId: number,
+  districtId: number | undefined,
   wardId: number,
 ): Promise<ResolvedAddress | undefined> {
   const province = (await loadProvinces()).find((p) => p.id === provinceId);
   if (province === undefined) return undefined;
 
-  const district = (await loadDistricts()).find((d) => d.id === districtId && d.provinceId === provinceId);
+  const districts = await loadDistricts();
+  const wards = await loadWards();
+
+  // Two-tier: no district sent. Allowed only when Sapo itself has no district level for this
+  // province — never merely because the request left the field out. Otherwise dropping `districtId`
+  // would be a way to skip the containment check below.
+  if (districtId === undefined) {
+    if (districts.some((d) => d.provinceId === provinceId)) return undefined;
+    const ward = wards.find((w) => w.id === wardId && w.provinceId === provinceId);
+    if (ward === undefined) return undefined;
+    return {
+      province: province.name,
+      provinceCode: province.code,
+      provinceId: province.id,
+      ward: ward.name,
+      wardCode: ward.code,
+      wardId: ward.id,
+    };
+  }
+
+  const district = districts.find((d) => d.id === districtId && d.provinceId === provinceId);
   if (district === undefined) return undefined;
 
-  const ward = (await loadWards()).find((w) => w.id === wardId && w.districtId === districtId);
+  const ward = wards.find((w) => w.id === wardId && w.districtId === districtId);
   if (ward === undefined) return undefined;
 
   return {

@@ -63,7 +63,11 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
   const rows = lines.map((line) => ({ line, product: byVariant.get(line.variantId) }));
   const goodsTotal = rows.reduce((sum, r) => sum + (r.product ? r.product.priceVnd * r.line.quantity : 0), 0);
   const hasUnavailable = rows.some((r) => r.product === undefined);
-  const addressComplete = address.provinceId !== undefined && address.districtId !== undefined && address.wardId !== undefined;
+  // Province and ward only: the district is not part of the test because AddressSelects enforces
+  // the chain — the ward select stays disabled until its parent is settled, so a chosen ward already
+  // implies a chosen district wherever Sapo still has one. Requiring districtId here would block
+  // checkout on a two-tier province, which is the case this is meant to survive.
+  const addressComplete = address.provinceId !== undefined && address.wardId !== undefined;
   const canPay = rows.length > 0 && !hasUnavailable && addressComplete;
 
   /** The cart as the API wants it: quantities only. */
