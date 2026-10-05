@@ -8,6 +8,7 @@ import { getProductByHandle } from "@/lib/catalog";
 import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
 import { formatVnd, isSoldOut, maxOrderableQuantity } from "@/lib/product";
+import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
 
@@ -190,7 +191,12 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
               </span>
             )}
           </p>
-          <p className="mt-2 text-xs text-ink-soft">Phí vận chuyển được tính khi thanh toán.</p>
+          {/* Concrete, because this line used to promise a calculation that did not exist. The
+              threshold is read from lib/shipping.ts, so the page cannot drift from what is charged. */}
+          <p className="mt-2 text-xs text-ink-soft">
+            Phí vận chuyển tính theo tỉnh/thành khi thanh toán — miễn phí với đơn từ{" "}
+            {formatVnd(FREE_SHIPPING_THRESHOLD_VND)}.
+          </p>
 
           {product.stock !== null && (
             <p className={`mt-4 font-mono text-xs ${soldOut ? "text-[color:var(--err)]" : "text-[color:var(--ok)]"}`}>

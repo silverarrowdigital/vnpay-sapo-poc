@@ -13,9 +13,13 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 /**
  * Restyled in T3.6. There is no reference design for this page, so it is built from the same
- * tokens and type as the copied ones. **Every branch below is unchanged** — in particular the
- * "order not found" case still names which store backend is in use, because that one sentence is
- * what distinguishes "this instance never saw the checkout" from "the record expired".
+ * tokens and type as the copied ones. The "order not found" case names which store backend is in
+ * use, because that one sentence is what distinguishes "this instance never saw the checkout" from
+ * "the record expired".
+ *
+ * T7 added two things: a COD order is finished the moment it exists and must not be described as a
+ * confirmed payment, and the money is now broken down (goods, discount, delivery) so the page
+ * accounts for the exact amount that was taken.
  */
 const TONE: Record<"ok" | "warn" | "err", string> = {
   ok: "border-primary text-[color:var(--ok)]",
@@ -56,6 +60,12 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
     tone = "warn";
     detail =
       "Không kết nối được tới kho lưu đơn, nên trang này chưa thể nói điều gì đã xảy ra. Nếu thanh toán đã thành công, xác nhận từ VNPAY vẫn sẽ được xử lý. Trang sẽ tự thử lại.";
+  } else if (order?.status === "completed" && order.paymentMethod === "cod") {
+    // COD has no payment to confirm, so "completed" here means the order exists and the money is
+    // still to come. Saying "đã xác nhận thanh toán" would be a lie to the customer and to the shop.
+    headline = "Đã nhận đơn hàng — thanh toán khi nhận";
+    tone = "ok";
+    detail = `Đơn ${order.sapoOrder?.name ?? ""} đã được tạo. Bạn trả ${formatVnd(order.amountVnd)} bằng tiền mặt khi nhận hàng. Shop sẽ gọi để xác nhận.`;
   } else if (order?.status === "completed") {
     headline = "Đã xác nhận thanh toán — đơn hàng được tạo";
     tone = "ok";
@@ -112,8 +122,40 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
                 </div>
               ))}
             </dd>
-            <dt className="text-ink-soft">Số tiền</dt>
+            {order.goodsVnd !== undefined && order.goodsVnd !== order.amountVnd && (
+              <>
+                <dt className="text-ink-soft">Tạm tính</dt>
+                <dd className="m-0 font-mono">{formatVnd(order.goodsVnd)}</dd>
+              </>
+            )}
+            {order.discount !== undefined && (
+              <>
+                <dt className="text-ink-soft">Giảm giá</dt>
+                <dd className="m-0 font-mono">
+                  {order.discount.code} −{formatVnd(order.discount.amountVnd)}
+                </dd>
+              </>
+            )}
+            {order.shipping !== undefined && (
+              <>
+                <dt className="text-ink-soft">Phí vận chuyển</dt>
+                <dd className="m-0 font-mono">
+                  {order.shipping.priceVnd === 0 ? "Miễn phí" : formatVnd(order.shipping.priceVnd)}
+                </dd>
+              </>
+            )}
+            <dt className="text-ink-soft">{order.paymentMethod === "cod" ? "Thu khi nhận" : "Số tiền"}</dt>
             <dd className="m-0 font-mono">{formatVnd(order.amountVnd)}</dd>
+            {(order.customer.province ?? order.customer.district ?? order.customer.ward) !== undefined && (
+              <>
+                <dt className="text-ink-soft">Giao tới</dt>
+                <dd className="m-0">
+                  {[order.customer.address, order.customer.ward, order.customer.district, order.customer.province]
+                    .filter((part) => part !== undefined && part !== "")
+                    .join(", ")}
+                </dd>
+              </>
+            )}
             <dt className="text-ink-soft">Trạng thái</dt>
             <dd className="m-0 font-mono">{order.status}</dd>
           </>
@@ -132,9 +174,19 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
         )}
       </dl>
 
-      <p className="mt-10">
+      {order?.status === "completed" && txnRef && (
+        <p className="mt-8 rounded-lg border border-line px-4 py-3 text-sm">
+          Lưu lại mã <strong className="font-mono">{txnRef}</strong> — cùng số điện thoại, nó là cách xem lại đơn này ở{" "}
+          <Link href={`/tra-cuu-don?txnRef=${encodeURIComponent(txnRef)}`}>trang tra cứu đơn hàng</Link>.
+        </p>
+      )}
+
+      <p className="mt-10 flex flex-wrap gap-6">
         <Link href="/" className="text-sm">
           ← Về trang sản phẩm
+        </Link>
+        <Link href="/tra-cuu-don" className="text-sm">
+          Tra cứu đơn hàng
         </Link>
       </p>
     </div>

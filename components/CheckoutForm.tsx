@@ -1,41 +1,142 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { MAX_QUANTITY, formatVnd, maxOrderableQuantity, type CatalogProduct } from "@/lib/product";
+import AddressSelects, { type AddressSelection } from "./AddressSelects";
+import { FIELD_CLASS, FIELD_ERROR_CLASS } from "./formField";
 import { useCart } from "./useCart";
 
-type FieldErrors = Partial<Record<"name" | "phone" | "email" | "address" | "lines", string>>;
+type FieldErrors = Partial<
+  Record<
+    "name" | "phone" | "email" | "address" | "provinceId" | "districtId" | "wardId" | "discountCode" | "lines",
+    string
+  >
+>;
+
+/** What /api/quote returns: the same numbers /api/checkout will charge. */
+interface Quote {
+  goodsVnd: number;
+  discount?: { code: string; amountVnd: number; summary: string };
+  shipping: { title: string; feeVnd: number; listFeeVnd: number; isFree: boolean; zoneLabel: string };
+  totalVnd: number;
+}
+
+type PaymentMethod = "vnpay" | "cod";
 
 /**
- * The cart and the delivery form on one page (restyled in T3.6).
+ * The cart and the delivery form on one page.
  *
- * There is no reference design for checkout — it is built from the same tokens, type and controls
- * as the pages that were copied. The behaviour below is unchanged from before the redesign, and
- * deliberately so:
+ * Three things here are load-bearing and should not be "simplified":
  *
- * - `catalog` comes from the server, so names, prices and stock are live Sapo values.
- * - The request carries **quantities only**; the server reprices every line. The total here is a
- *   display total.
- * - In development the server names the env vars it could not read (never their values), and that
- *   is surfaced below — it is the fastest way to diagnose a misconfigured `.env.local`.
+ * - **The total shown comes from the server** (`/api/quote`), not from arithmetic in the browser.
+ *   The delivery fee depends on the chosen province and the discount depends on a Sapo price rule,
+ *   so a second implementation here would be a second answer — and the one the customer reads is
+ *   the one they expect to be charged. Before a province is chosen there is deliberately **no**
+ *   total: the page says the fee is calculated once the address is known rather than promising a
+ *   number it cannot produce.
+ * - **The request carries a discount *code*, never an amount.** `/api/checkout` re-verifies the
+ *   code against Sapo and recomputes the money. Editing anything in this component changes the
+ *   display and nothing else.
  * - The cart is not cleared here. That happens on the result page, so a cancelled payment does not
  *   cost the customer their basket.
+ *
+ * In development the server also names the env vars it could not read (never their values), which
+ * is the fastest way to diagnose a misconfigured `.env.local`.
  */
-const FIELD_CLASS =
-  "w-full rounded-lg border border-line bg-white px-4 py-3 text-sm text-ink outline-none focus-visible:border-ink";
-
 export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] }) {
   const { lines, setQuantity, remove } = useCart();
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
+  const [address, setAddress] = useState<AddressSelection>({});
+  const [method, setMethod] = useState<PaymentMethod>("vnpay");
+
+  const [codeInput, setCodeInput] = useState("");
+  const [appliedCode, setAppliedCode] = useState<string | undefined>(undefined);
+  const [codeError, setCodeError] = useState<string | null>(null);
+
+  const [quote, setQuote] = useState<Quote | undefined>(undefined);
+  const [quoting, setQuoting] = useState(false);
 
   const byVariant = new Map(catalog.map((p) => [p.variantId, p]));
   const rows = lines.map((line) => ({ line, product: byVariant.get(line.variantId) }));
-  const total = rows.reduce((sum, r) => sum + (r.product ? r.product.priceVnd * r.line.quantity : 0), 0);
+  const goodsTotal = rows.reduce((sum, r) => sum + (r.product ? r.product.priceVnd * r.line.quantity : 0), 0);
   const hasUnavailable = rows.some((r) => r.product === undefined);
-  const canPay = rows.length > 0 && !hasUnavailable;
+  const addressComplete = address.provinceId !== undefined && address.districtId !== undefined && address.wardId !== undefined;
+  const canPay = rows.length > 0 && !hasUnavailable && addressComplete;
+
+  /** The cart as the API wants it: quantities only. */
+  const cartPayload = lines.map(({ variantId, quantity }) => ({ variantId, quantity }));
+  const cartKey = JSON.stringify(cartPayload);
+
+  // Re-quote when the cart, the province or the applied code changes. Debounced, because the
+  // quantity steppers fire several times while a customer holds the button down and each quote is
+  // a Sapo read.
+  const quoteSeq = useRef(0);
+  const refreshQuote = useCallback(
+    async (code: string | undefined) => {
+      if (address.provinceId === undefined) {
+        setQuote(undefined);
+        return;
+      }
+      const seq = ++quoteSeq.current;
+      setQuoting(true);
+      try {
+        const res = await fetch("/api/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines: JSON.parse(cartKey), provinceId: address.provinceId, discountCode: code }),
+        });
+        const json = (await res.json()) as Quote & { error?: string; fields?: FieldErrors; needsProvince?: boolean };
+        if (seq !== quoteSeq.current) return; // a newer quote is already in flight
+        if (!res.ok) {
+          // A refused code must not leave a stale discount on screen: drop it and say why.
+          if (json.fields?.discountCode ?? json.error) setCodeError(json.fields?.discountCode ?? json.error ?? null);
+          if (code !== undefined) setAppliedCode(undefined);
+          setQuote(undefined);
+          return;
+        }
+        if (json.needsProvince) {
+          setQuote(undefined);
+          return;
+        }
+        setQuote(json);
+        setCodeError(null);
+      } catch {
+        if (seq === quoteSeq.current) setQuote(undefined);
+      } finally {
+        if (seq === quoteSeq.current) setQuoting(false);
+      }
+    },
+    [address.provinceId, cartKey],
+  );
+
+  useEffect(() => {
+    const t = setTimeout(() => void refreshQuote(appliedCode), 300);
+    return () => clearTimeout(t);
+  }, [refreshQuote, appliedCode]);
+
+  function applyCode(e: FormEvent) {
+    e.preventDefault();
+    const code = codeInput.trim();
+    setCodeError(null);
+    if (code === "") {
+      setAppliedCode(undefined);
+      return;
+    }
+    if (address.provinceId === undefined) {
+      setCodeError("Hãy chọn địa chỉ giao hàng trước để tính được đơn hàng.");
+      return;
+    }
+    setAppliedCode(code);
+  }
+
+  function clearCode() {
+    setCodeInput("");
+    setAppliedCode(undefined);
+    setCodeError(null);
+  }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -52,29 +153,38 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           phone: data.get("phone"),
           email: data.get("email"),
           address: data.get("address"),
+          provinceId: address.provinceId,
+          districtId: address.districtId,
+          wardId: address.wardId,
+          paymentMethod: method,
+          // A code, never an amount: the server decides what it is worth.
+          discountCode: appliedCode,
           // Quantities only. Sending a price would be ignored: the server prices from Sapo.
-          lines: lines.map(({ variantId, quantity }) => ({ variantId, quantity })),
+          lines: cartPayload,
         }),
       });
       const json = (await res.json()) as {
         paymentUrl?: string;
+        successUrl?: string;
         error?: string;
         fields?: FieldErrors;
         // Development only: names of env vars the server could not read (never values).
         missing?: string[];
         placeholder?: string[];
       };
-      if (!res.ok || !json.paymentUrl) {
+      if (!res.ok || !(json.paymentUrl ?? json.successUrl)) {
         setErrors(json.fields ?? {});
+        if (json.fields?.discountCode) setCodeError(json.fields.discountCode);
         const hints = [
           json.missing?.length ? `Thiếu: ${json.missing.join(", ")}` : undefined,
           json.placeholder?.length ? `Còn là giá trị mẫu: ${json.placeholder.join(", ")}` : undefined,
         ].filter((hint) => hint !== undefined);
-        setFormError([json.error ?? "Không khởi tạo được thanh toán.", ...hints].join(" "));
+        setFormError([json.error ?? "Không khởi tạo được đơn hàng.", ...hints].join(" "));
         setSubmitting(false);
         return;
       }
-      window.location.assign(json.paymentUrl); // hand off to VNPAY
+      // VNPAY: hand off to the gateway. COD: the order already exists, go to the result page.
+      window.location.assign(json.paymentUrl ?? (json.successUrl as string));
     } catch {
       setFormError("Lỗi mạng. Vui lòng thử lại.");
       setSubmitting(false);
@@ -96,6 +206,15 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
     );
   }
 
+  const payLabel =
+    method === "cod"
+      ? quote !== undefined
+        ? `Đặt hàng — thu ${formatVnd(quote.totalVnd)} khi nhận`
+        : "Đặt hàng (thanh toán khi nhận)"
+      : quote !== undefined
+        ? `Thanh toán ${formatVnd(quote.totalVnd)} qua VNPAY`
+        : "Thanh toán qua VNPAY";
+
   // Two equal columns at desktop: delivery form left, order summary right.
   return (
     <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
@@ -108,7 +227,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
               Họ và tên
             </label>
             <input id="name" name="name" autoComplete="name" required maxLength={100} className={FIELD_CLASS} />
-            {errors.name && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.name}</span>}
+            {errors.name && <span className={FIELD_ERROR_CLASS}>{errors.name}</span>}
           </div>
 
           <div>
@@ -124,7 +243,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
               required
               className={FIELD_CLASS}
             />
-            {errors.phone && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.phone}</span>}
+            {errors.phone && <span className={FIELD_ERROR_CLASS}>{errors.phone}</span>}
           </div>
 
           <div>
@@ -132,12 +251,14 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
               Email
             </label>
             <input id="email" name="email" type="email" autoComplete="email" required className={FIELD_CLASS} />
-            {errors.email && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.email}</span>}
+            {errors.email && <span className={FIELD_ERROR_CLASS}>{errors.email}</span>}
           </div>
+
+          <AddressSelects value={address} onChange={setAddress} errors={errors} />
 
           <div>
             <label htmlFor="address" className="mb-1 block text-xs tracking-wide uppercase">
-              Địa chỉ
+              Số nhà, đường
             </label>
             <textarea
               id="address"
@@ -146,10 +267,41 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
               rows={2}
               required
               maxLength={255}
+              placeholder="Ví dụ: 14/8 Lam Sơn"
               className={FIELD_CLASS}
             />
-            {errors.address && <span className="mt-1 block text-xs text-[color:var(--err)]">{errors.address}</span>}
+            {errors.address && <span className={FIELD_ERROR_CLASS}>{errors.address}</span>}
           </div>
+        </div>
+
+        <h2 className="font-display mt-10 mb-4 text-2xl font-normal">Thanh toán</h2>
+        <div className="grid gap-3">
+          {(
+            [
+              { id: "vnpay", title: "Thẻ / Chuyển khoản qua VNPAY", hint: "Trả trước, đơn được xác nhận ngay." },
+              { id: "cod", title: "Thanh toán khi nhận hàng (COD)", hint: "Trả tiền mặt cho người giao hàng." },
+            ] as const
+          ).map((option) => (
+            <label
+              key={option.id}
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 ${
+                method === option.id ? "border-ink" : "border-line"
+              }`}
+            >
+              <input
+                type="radio"
+                name="paymentMethod"
+                value={option.id}
+                checked={method === option.id}
+                onChange={() => setMethod(option.id)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm">{option.title}</span>
+                <span className="block text-xs text-ink-soft">{option.hint}</span>
+              </span>
+            </label>
+          ))}
         </div>
 
         {formError && (
@@ -163,8 +315,13 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           disabled={submitting || !canPay}
           className="mt-6 w-full cursor-pointer rounded-full border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? "Đang chuyển tới VNPAY…" : `Thanh toán ${formatVnd(total)} qua VNPAY`}
+          {submitting ? (method === "cod" ? "Đang tạo đơn…" : "Đang chuyển tới VNPAY…") : payLabel}
         </button>
+        {!addressComplete && rows.length > 0 && (
+          <p className="mt-3 text-center text-xs text-ink-soft">
+            Chọn đủ tỉnh/thành, quận/huyện và phường/xã để tính phí vận chuyển.
+          </p>
+        )}
       </form>
 
       <aside className="order-1 lg:order-2 lg:sticky lg:top-8 lg:self-start">
@@ -242,9 +399,85 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           })}
         </ul>
 
-        <div className="mt-5 flex items-center justify-between">
+        <div className="mt-5 border-b border-line pb-5">
+          <label htmlFor="discountCode" className="mb-1 block text-xs tracking-wide uppercase">
+            Mã giảm giá
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="discountCode"
+              name="discountCode"
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value)}
+              onKeyDown={(e) => {
+                // The form around it belongs to the delivery details; Enter here must apply the
+                // code, not submit the checkout.
+                if (e.key === "Enter") applyCode(e);
+              }}
+              maxLength={64}
+              autoCapitalize="characters"
+              spellCheck={false}
+              placeholder="Nhập mã nếu có"
+              className={FIELD_CLASS}
+            />
+            <button
+              type="button"
+              onClick={applyCode}
+              className="cursor-pointer rounded-lg border border-ink bg-transparent px-5 text-sm whitespace-nowrap"
+            >
+              Áp dụng
+            </button>
+          </div>
+          {codeError && <span className={FIELD_ERROR_CLASS}>{codeError}</span>}
+          {quote?.discount !== undefined && (
+            <p className="mt-2 flex items-center justify-between gap-3 text-xs text-[color:var(--ok)]">
+              <span>
+                Đã áp dụng <strong>{quote.discount.code}</strong> — {quote.discount.summary}
+              </span>
+              <button
+                type="button"
+                onClick={clearCode}
+                className="cursor-pointer border-0 bg-transparent text-xs text-ink-soft underline"
+              >
+                Bỏ
+              </button>
+            </p>
+          )}
+        </div>
+
+        <dl className="m-0 mt-5 grid grid-cols-[1fr_auto] gap-y-2 text-sm">
+          <dt className="m-0">Tạm tính</dt>
+          <dd className="m-0 font-mono text-right">{formatVnd(quote?.goodsVnd ?? goodsTotal)}</dd>
+
+          {quote?.discount !== undefined && (
+            <>
+              <dt className="m-0">Giảm giá</dt>
+              <dd className="m-0 font-mono text-right text-[color:var(--ok)]">
+                −{formatVnd(quote.discount.amountVnd)}
+              </dd>
+            </>
+          )}
+
+          <dt className="m-0">Phí vận chuyển</dt>
+          <dd className="m-0 font-mono text-right">
+            {quote === undefined ? (
+              <span className="text-ink-soft">Chọn địa chỉ</span>
+            ) : quote.shipping.isFree ? (
+              <span>
+                <span className="mr-2 text-ink-soft line-through">{formatVnd(quote.shipping.listFeeVnd)}</span>
+                Miễn phí
+              </span>
+            ) : (
+              formatVnd(quote.shipping.feeVnd)
+            )}
+          </dd>
+        </dl>
+
+        <div className="mt-4 flex items-center justify-between border-t border-line pt-4">
           <span className="text-sm">Tổng cộng</span>
-          <span className="font-mono text-lg">{formatVnd(total)}</span>
+          <span className="font-mono text-lg" aria-live="polite">
+            {quote !== undefined ? formatVnd(quote.totalVnd) : quoting ? "đang tính…" : "—"}
+          </span>
         </div>
 
         {errors.lines && <p className="mt-3 text-sm text-[color:var(--err)]">{errors.lines}</p>}

@@ -534,3 +534,50 @@ dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
 .callout.success { border-left-color: var(--ok); }
 .callout-heading { margin: 0 0 var(--space-1); font-weight: 600; }
 .callout-body { margin: 0; max-width: var(--measure); }
+
+/* --- Print: the order slip (T7.7) ---
+
+   One print stylesheet, scoped by `.print-slip` on the element that should survive. The page the
+   customer prints is the order they just looked up, so everything that is navigation, chrome or
+   a control is dropped and the slip gets black ink on white paper regardless of the screen theme.
+
+   This is a packing/order slip, NOT a VAT invoice (hoá đơn điện tử): a legal invoice has to be
+   issued through a licensed provider and reported to the tax authority, which is not something a
+   storefront can do. See docs/plan/T7-ban-hang-that.md § T7.7. */
+
+@media print {
+  .site-header,
+  header,
+  footer,
+  nav,
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  main {
+    margin: 0;
+    padding: 0;
+  }
+
+  .print-slip {
+    max-width: none;
+    padding: 0;
+    border: 0;
+  }
+
+  /* A slip that breaks a line item across two pages is a slip someone has to re-read. */
+  .print-slip tr,
+  .print-slip li,
+  .print-slip .slip-block {
+    break-inside: avoid;
+  }
+
+  a[href]::after {
+    content: "";
+  }
+}
