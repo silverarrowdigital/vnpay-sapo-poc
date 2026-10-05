@@ -160,13 +160,49 @@ export async function fetchCatalogEntries(cfg: SapoConfig): Promise<SapoCatalogE
   return entries;
 }
 
+/** How the order was paid. COD is the only one that creates an order before money arrives. */
+export type PaymentMethod = "vnpay" | "cod";
+
+/**
+ * A delivery address, split the way Vietnam addresses are and Sapo stores them.
+ *
+ * Field names verified against a live order (2026-10-05): every `shipping_address` and
+ * `billing_address` on the store carries `province`, `province_code`, `district`, `district_code`,
+ * `ward`, `ward_code` alongside `address1`. **Sapo's own docs do not list `district` or `ward`** —
+ * https://support.sapo.vn/cac-thuoc-tinh-cua-order-api stops at `province`/`province_code` — so
+ * these four are taken from what the live API itself returns on every order, not invented here.
+ */
+export interface SapoAddressParts {
+  /** House number and street — what the customer types. */
+  address1: string;
+  ward?: string;
+  wardCode?: string;
+  district?: string;
+  districtCode?: string;
+  province?: string;
+  provinceCode?: string;
+}
+
+export interface SapoCustomerInput extends SapoAddressParts {
+  name: string;
+  phone: string;
+  email: string;
+}
+
 export interface SapoOrderInput {
   txnRef: string;
-  vnpTransactionNo: string;
+  method: PaymentMethod;
+  /** VNPAY's own references. Absent for COD, where no payment has happened yet. */
+  vnpTransactionNo?: string;
   vnpBankCode?: string;
   vnpPayDate?: string;
-  customer: { name: string; phone: string; email: string; address: string };
+  customer: SapoCustomerInput;
   lines: SapoOrderLine[];
+  /** Delivery, priced by lib/shipping.ts. Sent as a Sapo `shipping_line`. */
+  shipping?: { title: string; code: string; priceVnd: number };
+  /** A verified discount. The amount is always the server's own computation. */
+  discount?: { code: string; amountVnd: number };
+  /** What the customer pays in total: goods − discount + shipping. */
   totalVnd: number;
 }
 
@@ -224,9 +260,22 @@ async function sapoFetch(cfg: SapoConfig, path: string, init: RequestInit = {}):
   }
 }
 
-/** Tag used to find an order again by its VNPAY reference (idempotency across restarts/instances). */
-export function txnTag(txnRef: string): string {
-  return `vnpay-${txnRef}`;
+/**
+ * Read-only Sapo GET, exported for the modules that only ever read: `lib/locations.ts` (the
+ * administrative-division tables) and `lib/discount.ts` (price rules). They get the same auth,
+ * timeout and error shape as every other call rather than each building their own fetch.
+ */
+export async function sapoGet(cfg: SapoConfig, path: string): Promise<unknown> {
+  return sapoFetch(cfg, path);
+}
+
+/**
+ * Tag used to find an order again by its payment reference (idempotency across restarts and
+ * instances). VNPAY orders keep the `vnpay-` prefix they have always had — existing orders are
+ * found by it — and COD gets its own, so the two payment paths can never match each other's order.
+ */
+export function txnTag(txnRef: string, method: PaymentMethod = "vnpay"): string {
+  return `${method}-${txnRef}`;
 }
 
 /** "Nguyễn Văn An" → last_name "Nguyễn Văn", first_name "An" (Vietnamese given name comes last). */
@@ -238,13 +287,24 @@ function splitName(full: string): { first_name: string; last_name: string } {
 
 export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
   const { first_name, last_name } = splitName(input.customer.name);
+  const c = input.customer;
   const address = {
     first_name,
     last_name,
     name: input.customer.name,
     phone: input.customer.phone,
-    address1: input.customer.address,
+    address1: c.address1,
     country: "Vietnam",
+    // Only send a level the customer actually chose. An explicit null would overwrite nothing,
+    // but it also tells a courier integration "there is no district", which is worse than absent.
+    ...(c.ward !== undefined ? { ward: c.ward } : {}),
+    ...(c.wardCode !== undefined ? { ward_code: c.wardCode } : {}),
+    ...(c.district !== undefined ? { district: c.district } : {}),
+    ...(c.districtCode !== undefined ? { district_code: c.districtCode } : {}),
+    ...(c.province !== undefined ? { province: c.province } : {}),
+    ...(c.provinceCode !== undefined ? { province_code: c.provinceCode } : {}),
+    // Sapo has a separate `city` field that the live store leaves null on every order; the
+    // province is the city for Hà Nội / TP HCM, so there is nothing distinct to put in it.
   };
 
   // A line's own variantId wins; cfg.variantId is the fallback that keeps a legacy single-line
@@ -257,6 +317,8 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
   );
   const anyVariantLinked = resolved.some(({ variantId }) => variantId !== undefined);
 
+  const paid = input.method === "vnpay";
+
   return {
     order: {
       email: input.customer.email,
@@ -265,18 +327,63 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
       customer: { first_name, last_name, email: input.customer.email, phone: input.customer.phone },
       billing_address: address,
       shipping_address: address,
-      financial_status: "paid",
-      transactions: [{ kind: "sale", status: "success", amount: input.totalVnd, gateway: "VNPAY" }],
-      note: `Paid via VNPAY Sandbox. TxnRef ${input.txnRef}, VNPAY TransactionNo ${input.vnpTransactionNo}.`,
+      // Delivery as its own line, so the shop's books show goods and shipping separately and the
+      // total Sapo computes is the total VNPAY charged. Field names from the docs:
+      // https://support.sapo.vn/cac-thuoc-tinh-cua-order-api — code, price, source, title.
+      ...(input.shipping !== undefined
+        ? {
+            shipping_lines: [
+              {
+                title: input.shipping.title,
+                code: input.shipping.code,
+                price: input.shipping.priceVnd,
+                source: "vnpay-sapo-poc",
+              },
+            ],
+          }
+        : {}),
+      // The discount is sent as the **amount we actually charged**, as a fixed_amount, even for a
+      // percentage rule. Sending "percentage" would ask Sapo to recompute it, and a rounding
+      // difference of one đồng between Sapo's arithmetic and ours would put the order total out of
+      // step with the money VNPAY took. Our number is the one the customer paid, so our number is
+      // the one recorded. Documented types: percentage | shipping | fixed_amount (default).
+      ...(input.discount !== undefined
+        ? { discount_codes: [{ code: input.discount.code, amount: input.discount.amountVnd, type: "fixed_amount" }] }
+        : {}),
+      // COD is "pending" — documented value, "Việc thanh toán đang tạm hoãn". The money has not
+      // arrived, so saying "paid" here would be a false entry in the shop's books.
+      financial_status: paid ? "paid" : "pending",
+      // No transaction for COD: nothing has been captured. Sapo derives the order's top-level
+      // `gateway` from this array, so a COD order carries no gateway, and its payment method is
+      // recorded in the note, the note_attributes and the tags instead.
+      ...(paid ? { transactions: [{ kind: "sale", status: "success", amount: input.totalVnd, gateway: "VNPAY" }] } : {}),
+      note: paid
+        ? `Paid via VNPAY Sandbox. TxnRef ${input.txnRef}, VNPAY TransactionNo ${input.vnpTransactionNo ?? ""}.`
+        : `Thanh toán khi nhận hàng (COD). Mã đơn ${input.txnRef}. CHƯA thu tiền.`,
       note_attributes: [
-        { name: "vnp_TxnRef", value: input.txnRef },
-        { name: "vnp_TransactionNo", value: input.vnpTransactionNo },
-        { name: "vnp_BankCode", value: input.vnpBankCode ?? "" },
-        { name: "vnp_PayDate", value: input.vnpPayDate ?? "" },
+        { name: "payment_method", value: input.method },
+        { name: "order_ref", value: input.txnRef },
+        ...(paid
+          ? [
+              { name: "vnp_TxnRef", value: input.txnRef },
+              { name: "vnp_TransactionNo", value: input.vnpTransactionNo ?? "" },
+              { name: "vnp_BankCode", value: input.vnpBankCode ?? "" },
+              { name: "vnp_PayDate", value: input.vnpPayDate ?? "" },
+            ]
+          : []),
         { name: "sku", value: input.lines.map((l) => l.sku).join(", ") },
+        ...(input.shipping !== undefined
+          ? [{ name: "shipping_fee_vnd", value: String(input.shipping.priceVnd) }]
+          : []),
+        ...(input.discount !== undefined
+          ? [
+              { name: "discount_code", value: input.discount.code },
+              { name: "discount_vnd", value: String(input.discount.amountVnd) },
+            ]
+          : []),
         { name: "amount_vnd", value: String(input.totalVnd) },
       ],
-      tags: `headless-poc, vnpay, ${txnTag(input.txnRef)}`,
+      tags: `headless-poc, ${input.method}, ${txnTag(input.txnRef, input.method)}`,
       // Stock movement. Without this field Sapo defaults to "bypass" and never touches stock
       // (https://support.sapo.vn/phuong-thuc-post-cua-order-phan-2). Only meaningful when the
       // line is linked to a real variant — a custom line item has nothing to deduct.
@@ -302,8 +409,12 @@ interface OrderListItem {
   note_attributes?: { name: string; value: string }[];
 }
 
-/** Look for an order already created for this txnRef in the last 3 days. */
-export async function findOrderByTxnRef(cfg: SapoConfig, txnRef: string): Promise<SapoOrderRef | null> {
+/** Look for an order already created for this reference in the last 3 days. */
+export async function findOrderByTxnRef(
+  cfg: SapoConfig,
+  txnRef: string,
+  method: PaymentMethod = "vnpay",
+): Promise<SapoOrderRef | null> {
   const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
   const createdMin = since.toISOString().slice(0, 16).replace("T", " "); // "YYYY-MM-DD HH:mm"
   // Filter server-side on the singular "tag" parameter: verified against a live store to match
@@ -316,20 +427,30 @@ export async function findOrderByTxnRef(cfg: SapoConfig, txnRef: string): Promis
   //
   // created_on_min and the exact re-check below stay as a fallback: on a store that ignored
   // "tag" we would get a plain recent-orders list and still match correctly, just less cheaply.
+  const tag = txnTag(txnRef, method);
   const qs = new URLSearchParams({
-    tag: txnTag(txnRef),
+    tag,
     limit: "250",
     created_on_min: createdMin,
     fields: "id,name,tags,note_attributes",
   });
   const data = (await sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`)) as { orders?: OrderListItem[] };
-  const tag = txnTag(txnRef);
-  const match = (data.orders ?? []).find(
-    (o) =>
-      (o.tags ?? "").split(",").map((t) => t.trim()).includes(tag) ||
-      (o.note_attributes ?? []).some((a) => a.name === "vnp_TxnRef" && a.value === txnRef),
-  );
+  const match = (data.orders ?? []).find((o) => matchesRef(o, txnRef, tag));
   return match ? { id: match.id, name: match.name ?? `#${match.id}` } : null;
+}
+
+/**
+ * Does this listed order belong to our reference? The tag is checked whole, and the
+ * note_attributes are the fallback for a store that ignored the `tag` filter.
+ *
+ * `order_ref` is the attribute both payment paths write; `vnp_TxnRef` is kept because every order
+ * created before COD existed carries that one and nothing else.
+ */
+function matchesRef(o: OrderListItem, txnRef: string, tag: string): boolean {
+  if ((o.tags ?? "").split(",").map((t) => t.trim()).includes(tag)) return true;
+  return (o.note_attributes ?? []).some(
+    (a) => (a.name === "order_ref" || a.name === "vnp_TxnRef") && a.value === txnRef,
+  );
 }
 
 export async function createOrder(cfg: SapoConfig, input: SapoOrderInput): Promise<SapoOrderRef> {
@@ -342,14 +463,106 @@ export async function createOrder(cfg: SapoConfig, input: SapoOrderInput): Promi
   return { id: data.order.id, name: data.order.name ?? `#${data.order.id}` };
 }
 
-/** Idempotent create: reuse an existing Sapo order for this txnRef if one exists. */
+/** Idempotent create: reuse an existing Sapo order for this reference if one exists. */
 export async function createOrderOnce(
   cfg: SapoConfig,
   input: SapoOrderInput,
 ): Promise<{ order: SapoOrderRef; created: boolean }> {
-  const existing = await findOrderByTxnRef(cfg, input.txnRef);
+  const existing = await findOrderByTxnRef(cfg, input.txnRef, input.method);
   if (existing) return { order: existing, created: false };
   return { order: await createOrder(cfg, input), created: true };
+}
+
+/**
+ * What the customer-facing order lookup shows (T7.6). Read from the **list** endpoint, because
+ * `GET /admin/orders/{id}.json` returns no `line_items` on this store.
+ */
+export interface SapoOrderDetail extends SapoOrderRef {
+  createdOn?: string;
+  financialStatus?: string;
+  fulfillmentStatus?: string;
+  status?: string;
+  totalVnd: number;
+  shippingVnd: number;
+  discountVnd: number;
+  /** Digits only, for comparing against what the person looking up the order typed. */
+  phoneDigits: string;
+  lines: { title: string; sku?: string; quantity: number; priceVnd: number }[];
+  address?: {
+    address1?: string;
+    ward?: string;
+    district?: string;
+    province?: string;
+  };
+}
+
+interface OrderDetailRow extends OrderListItem {
+  created_on?: string;
+  financial_status?: string;
+  fulfillment_status?: string | null;
+  status?: string;
+  phone?: string | null;
+  total_price?: number | string | null;
+  total_shipping_price?: number | string | null;
+  total_discounts?: number | string | null;
+  line_items?: { title?: string; name?: string; sku?: string | null; quantity?: number; price?: number | string }[];
+  shipping_address?: {
+    address1?: string | null;
+    ward?: string | null;
+    district?: string | null;
+    province?: string | null;
+    phone?: string | null;
+  } | null;
+}
+
+/** Keep only digits, so "+84 912 345 678" and "0912345678" compare equal on their last 9. */
+function phoneDigits(raw: string | null | undefined): string {
+  return (raw ?? "").replace(/\D+/g, "");
+}
+
+/**
+ * The order for a reference, with enough detail to show the customer. Tries both payment paths'
+ * tags, so one reference finds its order whether it was paid by VNPAY or placed as COD.
+ *
+ * Deliberately does **not** check who is asking: the caller does that, by comparing the phone
+ * number. Keeping the two apart means this function stays a plain read and the access rule lives
+ * in one place (`lib/order.ts` `lookupOrder`).
+ */
+export async function fetchOrderDetailByRef(cfg: SapoConfig, txnRef: string): Promise<SapoOrderDetail | null> {
+  for (const method of ["vnpay", "cod"] as const) {
+    const tag = txnTag(txnRef, method);
+    const qs = new URLSearchParams({ tag, limit: "50", fields: "id,name,tags,note_attributes" });
+    const data = (await sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`)) as { orders?: OrderDetailRow[] };
+    const row = (data.orders ?? []).find((o) => matchesRef(o, txnRef, tag));
+    if (row === undefined) continue;
+    return {
+      id: row.id,
+      name: row.name ?? `#${row.id}`,
+      createdOn: row.created_on,
+      financialStatus: row.financial_status,
+      fulfillmentStatus: row.fulfillment_status ?? undefined,
+      status: row.status,
+      totalVnd: toVnd(row.total_price),
+      shippingVnd: toVnd(row.total_shipping_price),
+      discountVnd: toVnd(row.total_discounts),
+      phoneDigits: phoneDigits(row.phone ?? row.shipping_address?.phone),
+      lines: (row.line_items ?? []).map((l) => ({
+        title: (l.title ?? l.name ?? "").trim() || "Sản phẩm",
+        sku: (l.sku ?? "").trim() || undefined,
+        quantity: typeof l.quantity === "number" ? l.quantity : 0,
+        priceVnd: toVnd(l.price),
+      })),
+      address: row.shipping_address
+        ? {
+            address1: row.shipping_address.address1 ?? undefined,
+            ward: row.shipping_address.ward ?? undefined,
+            district: row.shipping_address.district ?? undefined,
+            province: row.shipping_address.province ?? undefined,
+          }
+        : undefined,
+    };
+  }
+  return null;
 }
 
 export function sapoAdminOrderUrl(cfg: SapoConfig, orderId: number): string {

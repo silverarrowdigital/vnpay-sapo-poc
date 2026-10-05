@@ -44,12 +44,47 @@ export interface PendingOrderLine {
   quantity: number;
 }
 
+/**
+ * The customer and where the order goes.
+ *
+ * `address` is the street line the customer typed; the three administrative levels are resolved
+ * server-side from Sapo's own tables (see lib/locations.ts) and stored by **name and code**, not
+ * by id. The names are what a courier reads and what Sapo records, and they must not change
+ * meaning later if Sapo renumbers a ward — the record has to keep saying where this order was
+ * actually sent. All six are optional because records written before T7.1 have none of them.
+ */
+export interface PendingOrderCustomer {
+  name: string;
+  phone: string;
+  email: string;
+  address: string;
+  ward?: string;
+  wardCode?: string;
+  district?: string;
+  districtCode?: string;
+  province?: string;
+  provinceCode?: string;
+  /** Kept only so the shipping fee can be re-derived from the same province the quote used. */
+  provinceId?: number;
+}
+
 export interface PendingOrder {
   txnRef: string;
   createdAt: string;
-  customer: { name: string; phone: string; email: string; address: string };
+  customer: PendingOrderCustomer;
   lines: PendingOrderLine[];
+  /**
+   * The total charged: goods − discount + shipping. This is the number the VNPAY URL is signed
+   * with and the number the IPN checks `vnp_Amount` against, so its meaning must not drift.
+   */
   amountVnd: number;
+  /** Goods only, before discount and before shipping. Absent on pre-T7 records. */
+  goodsVnd?: number;
+  /** A discount the server verified and computed. Never a number the browser sent. */
+  discount?: { code: string; amountVnd: number; summary?: string };
+  shipping?: { title: string; code: string; priceVnd: number };
+  /** Absent means VNPAY: every record written before COD existed was a VNPAY order. */
+  paymentMethod?: "vnpay" | "cod";
   status: OrderStatus;
   vnpResponseCode?: string;
   vnpTransactionNo?: string;
@@ -68,6 +103,7 @@ const CLAIM_TTL_SECONDS = 120;
 
 const ORDER_KEY = "vnpay-sapo:order:";
 const CLAIM_KEY = "vnpay-sapo:claim:";
+const RATE_KEY = "vnpay-sapo:rate:";
 
 /**
  * Key namespace, inserted after the fixed prefix.
@@ -114,6 +150,18 @@ export interface OrderStore {
    */
   claim(txnRef: string): Promise<boolean>;
   release(txnRef: string): Promise<void>;
+  /**
+   * Count one hit against `key` and return the running total inside the current window.
+   *
+   * A counter, not a verdict: the caller owns the limit, because "5 checkouts a minute" and "10
+   * lookup attempts an hour" are different policies over the same primitive. The window starts at
+   * the first hit and the key disappears when it ends, so a quiet caller is never penalised for
+   * what it did an hour ago.
+   *
+   * On Redis this is shared across instances, which is the only way a rate limit means anything on
+   * serverless. On the Map it is per-process — the same caveat as everything else in that backend.
+   */
+  hit(key: string, windowSeconds: number): Promise<number>;
 }
 
 /**
@@ -200,11 +248,16 @@ interface MemoryState {
   orders: Map<string, PendingOrder>;
   /** txnRef → epoch ms when the claim expires. */
   claims: Map<string, number>;
+  /** rate-limit key → running count and when the window ends. */
+  hits: Map<string, { count: number; expiresAt: number }>;
 }
 
 /** Kept on globalThis so `next dev`'s module reloads do not drop live orders. */
 const g = globalThis as typeof globalThis & { __vnpaySapoStore?: MemoryState };
-const memoryState: MemoryState = (g.__vnpaySapoStore ??= { orders: new Map(), claims: new Map() });
+const memoryState: MemoryState = (g.__vnpaySapoStore ??= { orders: new Map(), claims: new Map(), hits: new Map() });
+// A process that was running before `hits` existed keeps its state object, so make sure the new
+// map is there rather than trusting the `??=` above to have built it.
+memoryState.hits ??= new Map();
 
 class MemoryOrderStore implements OrderStore {
   readonly kind = "memory" as const;
@@ -214,6 +267,7 @@ class MemoryOrderStore implements OrderStore {
     const cutoff = now - ORDER_TTL_SECONDS * 1000;
     for (const [k, v] of memoryState.orders) if (Date.parse(v.createdAt) < cutoff) memoryState.orders.delete(k);
     for (const [k, expiresAt] of memoryState.claims) if (expiresAt <= now) memoryState.claims.delete(k);
+    for (const [k, h] of memoryState.hits) if (h.expiresAt <= now) memoryState.hits.delete(k);
   }
 
   async get(txnRef: string): Promise<PendingOrder | undefined> {
@@ -239,6 +293,17 @@ class MemoryOrderStore implements OrderStore {
 
   async release(txnRef: string): Promise<void> {
     memoryState.claims.delete(txnRef);
+  }
+
+  async hit(key: string, windowSeconds: number): Promise<number> {
+    const now = Date.now();
+    const current = memoryState.hits.get(key);
+    if (current === undefined || current.expiresAt <= now) {
+      memoryState.hits.set(key, { count: 1, expiresAt: now + windowSeconds * 1000 });
+      return 1;
+    }
+    current.count += 1;
+    return current.count;
   }
 }
 
@@ -288,6 +353,15 @@ class RedisOrderStore implements OrderStore {
   async release(txnRef: string): Promise<void> {
     await this.redis.del(this.claimKey(txnRef));
   }
+
+  async hit(key: string, windowSeconds: number): Promise<number> {
+    const k = RATE_KEY + this.namespace + key;
+    const count = await this.redis.incr(k);
+    // Only the caller that created the key sets its lifetime, so the window measures from the
+    // first hit. Setting it on every hit would turn a steady stream into a window that never ends.
+    if (count === 1) await this.redis.expire(k, windowSeconds);
+    return count;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,5 +407,6 @@ export const _keyNamespace = keyNamespace;
 export function _resetStore(): void {
   memoryState.orders.clear();
   memoryState.claims.clear();
+  memoryState.hits.clear();
   cached = undefined;
 }

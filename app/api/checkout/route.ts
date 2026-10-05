@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MissingEnvError } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
-import { CheckoutError, startCheckout, validateCheckout } from "@/lib/order";
+import { CheckoutError, overRateLimit, startCheckout, validateCheckout } from "@/lib/order";
 import { normaliseIp } from "@/lib/vnpay";
 
 export const runtime = "nodejs";
@@ -12,22 +12,40 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ error: "Dữ liệu gửi lên không hợp lệ" }, { status: 400 });
   }
 
   const result = validateCheckout(body);
   if (!result.ok) {
-    return NextResponse.json({ error: "Invalid checkout data", fields: result.errors }, { status: 400 });
+    return NextResponse.json({ error: "Thông tin chưa hợp lệ", fields: result.errors }, { status: 400 });
   }
 
   const ip = normaliseIp(request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip"));
 
+  // Throttled before any work: with COD a request on this route creates a real Sapo order, so an
+  // open endpoint is a way to fill the shop's order list. Counted before validation would punish a
+  // customer fixing a typo, so it sits here — after the shape is known good, before Sapo is called.
+  if (await overRateLimit("checkout", ip)) {
+    return NextResponse.json({ error: "Bạn thao tác quá nhanh. Vui lòng thử lại sau vài phút." }, { status: 429 });
+  }
+
   try {
-    const { txnRef, paymentUrl } = await startCheckout(result.value, ip);
-    return NextResponse.json({ txnRef, paymentUrl });
+    const started = await startCheckout(result.value, ip);
+    if (started.method === "cod") {
+      // Nothing to redirect to a gateway: the order already exists. The browser goes straight to
+      // the result page, which reads the same stored record a VNPAY order would leave behind.
+      return NextResponse.json({
+        txnRef: started.txnRef,
+        method: "cod",
+        orderName: started.sapoOrder.name,
+        successUrl: `/success?txnRef=${encodeURIComponent(started.txnRef)}&outcome=cod`,
+      });
+    }
+    return NextResponse.json({ txnRef: started.txnRef, method: "vnpay", paymentUrl: started.paymentUrl });
   } catch (err) {
     if (err instanceof CheckoutError) {
-      // Unknown sku / out of stock / more than we have: the customer can act on this.
+      // Out of stock, a withdrawn product, a bad address, a refused discount code: all things
+      // the customer can act on, so the message goes back as written.
       log.warn("checkout.rejected", { status: err.status, reason: err.message });
       return NextResponse.json({ error: err.message, fields: err.fields }, { status: err.status });
     }
@@ -37,9 +55,9 @@ export async function POST(request: NextRequest) {
       // page can say what to fix in .env.local. Production stays generic.
       const detail =
         process.env.NODE_ENV === "production" ? {} : { missing: err.missing, placeholder: err.placeholder };
-      return NextResponse.json({ error: "Payment is not configured on the server.", ...detail }, { status: 500 });
+      return NextResponse.json({ error: "Máy chủ chưa cấu hình thanh toán.", ...detail }, { status: 500 });
     }
     log.error("checkout.failed", { error: errorMessage(err) });
-    return NextResponse.json({ error: "Could not start payment. Please try again." }, { status: 500 });
+    return NextResponse.json({ error: "Không khởi tạo được đơn hàng. Vui lòng thử lại." }, { status: 500 });
   }
 }

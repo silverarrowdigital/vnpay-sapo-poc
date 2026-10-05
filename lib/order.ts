@@ -7,7 +7,9 @@
  * from both creating a Sapo order. Sapo's own lookup in `createOrderOnce` is the second guard.
  */
 import { getSapoConfig, getVnpayConfig } from "./config";
+import { DiscountRejected, quoteDiscount, normaliseCode, type DiscountQuote } from "./discount";
 import { errorMessage, log } from "./log";
+import { resolveAddress } from "./locations";
 import {
   MAX_CART_LINES,
   MAX_QUANTITY,
@@ -16,8 +18,16 @@ import {
   type CartLine,
   type DisplayProduct,
 } from "./product";
+import { quoteShipping, type ShippingQuote } from "./shipping";
 import { getDisplayProducts } from "./catalog";
-import { createOrderOnce, type SapoOrderRef } from "./sapo";
+import {
+  createOrderOnce,
+  fetchOrderDetailByRef,
+  type PaymentMethod,
+  type SapoOrderDetail,
+  type SapoOrderInput,
+  type SapoOrderRef,
+} from "./sapo";
 import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder, type PendingOrderLine } from "./store";
 import {
   CANCELLED_RESPONSE_CODE,
@@ -41,9 +51,19 @@ export interface CheckoutInput {
   name: string;
   phone: string;
   email: string;
+  /** Street line only; the three administrative levels arrive as ids and are resolved from Sapo. */
   address: string;
+  provinceId: number;
+  districtId: number;
+  wardId: number;
   /** What the browser asked for. Quantities only — every price is resolved in startCheckout. */
   lines: CartLine[];
+  /**
+   * A code the customer typed, or nothing. Never an amount: what it is worth is decided in
+   * startCheckout, against the cart the server has just repriced. See lib/discount.ts.
+   */
+  discountCode?: string;
+  paymentMethod: PaymentMethod;
 }
 
 export type ValidationResult = { ok: true; value: CheckoutInput } | { ok: false; errors: Record<string, string> };
@@ -57,32 +77,39 @@ const VN_PHONE_RE = /^(\+84|84|0)(3|5|7|8|9)\d{8}$/;
  * function is synchronous and the catalog comes from Sapo.
  */
 function readCartLines(value: unknown): { lines: CartLine[] } | { error: string } {
-  if (!Array.isArray(value) || value.length === 0) return { error: "Your cart is empty" };
-  if (value.length > MAX_CART_LINES) return { error: `A cart can hold at most ${MAX_CART_LINES} products` };
+  if (!Array.isArray(value) || value.length === 0) return { error: "Giỏ hàng đang trống" };
+  if (value.length > MAX_CART_LINES) return { error: `Giỏ hàng chỉ nhận tối đa ${MAX_CART_LINES} sản phẩm` };
 
   const merged = new Map<number, number>();
   for (const raw of value) {
-    if (typeof raw !== "object" || raw === null) return { error: "Invalid cart line" };
+    if (typeof raw !== "object" || raw === null) return { error: "Dòng giỏ hàng không hợp lệ" };
     const r = raw as Record<string, unknown>;
     const variantId = typeof r.variantId === "string" ? Number(r.variantId) : r.variantId;
     const quantity = typeof r.quantity === "string" ? Number(r.quantity) : r.quantity;
     if (typeof variantId !== "number" || !Number.isSafeInteger(variantId) || variantId <= 0)
-      return { error: "Invalid product in cart" };
+      return { error: "Sản phẩm trong giỏ không hợp lệ" };
     if (typeof quantity !== "number" || !Number.isInteger(quantity) || quantity < 1)
-      return { error: `Quantity must be a whole number from 1 to ${MAX_QUANTITY}` };
+      return { error: `Số lượng phải là số nguyên từ 1 đến ${MAX_QUANTITY}` };
     // The same variant listed twice is a client bug, not a reason to refuse a sale: fold it.
     merged.set(variantId, (merged.get(variantId) ?? 0) + quantity);
   }
 
   const lines = [...merged].map(([variantId, quantity]) => ({ variantId, quantity }));
   if (lines.some((l) => l.quantity > MAX_QUANTITY))
-    return { error: `Quantity must be a whole number from 1 to ${MAX_QUANTITY} per product` };
+    return { error: `Mỗi sản phẩm chỉ được từ 1 đến ${MAX_QUANTITY}` };
   return { lines };
+}
+
+/** A positive integer id as the browser sends it (JSON number or the string a `<select>` gives). */
+function readId(raw: unknown): number | undefined {
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n <= 0) return undefined;
+  return n;
 }
 
 export function validateCheckout(body: unknown): ValidationResult {
   const errors: Record<string, string> = {};
-  if (typeof body !== "object" || body === null) return { ok: false, errors: { body: "Invalid JSON body" } };
+  if (typeof body !== "object" || body === null) return { ok: false, errors: { body: "Dữ liệu gửi lên không hợp lệ" } };
   const b = body as Record<string, unknown>;
   const str = (k: string) => (typeof b[k] === "string" ? (b[k] as string).trim() : "");
 
@@ -91,18 +118,51 @@ export function validateCheckout(body: unknown): ValidationResult {
   const email = str("email").toLowerCase();
   const address = str("address");
 
-  if (name.length < 2 || name.length > 100) errors.name = "Name must be 2–100 characters";
-  if (!VN_PHONE_RE.test(phone)) errors.phone = "Enter a valid Vietnamese mobile number";
-  if (!EMAIL_RE.test(email) || email.length > 254) errors.email = "Enter a valid email";
-  if (address.length < 5 || address.length > 255) errors.address = "Address must be 5–255 characters";
+  if (name.length < 2 || name.length > 100) errors.name = "Họ tên phải từ 2 đến 100 ký tự";
+  if (!VN_PHONE_RE.test(phone)) errors.phone = "Số điện thoại di động không hợp lệ";
+  if (!EMAIL_RE.test(email) || email.length > 254) errors.email = "Email không hợp lệ";
+  if (address.length < 5 || address.length > 255) errors.address = "Địa chỉ phải từ 5 đến 255 ký tự";
+
+  // Only plausibility here. Whether these three actually exist, and whether the ward really sits in
+  // that district, is settled against Sapo's own tables in startCheckout — this function is
+  // synchronous and those tables come over the network.
+  const provinceId = readId(b.provinceId);
+  const districtId = readId(b.districtId);
+  const wardId = readId(b.wardId);
+  if (provinceId === undefined) errors.provinceId = "Hãy chọn tỉnh/thành phố";
+  if (districtId === undefined) errors.districtId = "Hãy chọn quận/huyện";
+  if (wardId === undefined) errors.wardId = "Hãy chọn phường/xã";
+
+  const rawMethod = str("paymentMethod") || "vnpay";
+  if (rawMethod !== "vnpay" && rawMethod !== "cod") errors.paymentMethod = "Hãy chọn cách thanh toán";
+  const paymentMethod = rawMethod as PaymentMethod;
+
+  // An unreadable code is treated as no code rather than an error: the customer is mid-typing or
+  // sent junk, and refusing the whole checkout over an optional field would be worse. A code that
+  // is readable but wrong is refused later, loudly, by lib/discount.ts.
+  const discountCode = normaliseCode(b.discountCode);
 
   const cart = readCartLines(b.lines);
   if ("error" in cart) errors.lines = cart.error;
 
   if (Object.keys(errors).length > 0 || !("lines" in cart)) {
-    return { ok: false, errors: Object.keys(errors).length > 0 ? errors : { lines: "Your cart is empty" } };
+    return { ok: false, errors: Object.keys(errors).length > 0 ? errors : { lines: "Giỏ hàng đang trống" } };
   }
-  return { ok: true, value: { name, phone, email, address, lines: cart.lines } };
+  return {
+    ok: true,
+    value: {
+      name,
+      phone,
+      email,
+      address,
+      provinceId: provinceId as number,
+      districtId: districtId as number,
+      wardId: wardId as number,
+      lines: cart.lines,
+      discountCode,
+      paymentMethod,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -139,12 +199,28 @@ export class CheckoutError extends Error {
   }
 }
 
-export async function startCheckout(
-  input: CheckoutInput,
-  ipAddr: string,
-): Promise<{ txnRef: string; paymentUrl: string }> {
-  const vnpay = getVnpayConfig(); // throws MissingEnvError if not configured
-  getSapoConfig(); // fail fast before taking payment if Sapo is not configured
+/**
+ * What a started checkout hands back. VNPAY gets a URL to send the browser to; COD has no payment
+ * step, so it comes back with the Sapo order it already created.
+ */
+export type CheckoutStarted =
+  | { method: "vnpay"; txnRef: string; paymentUrl: string }
+  | { method: "cod"; txnRef: string; sapoOrder: SapoOrderRef };
+
+/** The three money lines of an order, each computed on the server. */
+export interface OrderTotals {
+  goodsVnd: number;
+  discount?: DiscountQuote;
+  shipping: ShippingQuote;
+  /** goods − discount + shipping. The amount VNPAY is asked for and Sapo is told about. */
+  totalVnd: number;
+}
+
+export async function startCheckout(input: CheckoutInput, ipAddr: string): Promise<CheckoutStarted> {
+  const sapo = getSapoConfig(); // fail fast before taking payment if Sapo is not configured
+  // Only VNPAY needs a signing secret and a return URL. Demanding them for a COD order would make
+  // cash-on-delivery impossible to run on a store that has not finished its VNPAY paperwork.
+  const vnpay = input.paymentMethod === "vnpay" ? getVnpayConfig() : undefined;
 
   // Prices and stock come from the live catalog, never from the browser. Reading it here also
   // means a Sapo outage stops checkout before we take money.
@@ -153,22 +229,22 @@ export async function startCheckout(
   for (const p of catalog) if (p.variantId !== undefined) byVariant.set(p.variantId, p);
 
   const lines: PendingOrderLine[] = [];
-  let amountVnd = 0;
+  let goodsVnd = 0;
   for (const wanted of input.lines) {
     const product = byVariant.get(wanted.variantId);
     if (product === undefined) {
       // Withdrawn from Sapo, set to draft, or never existed. Either way it cannot be sold now.
-      throw new CheckoutError("A product in your cart is no longer available.", 409, {
-        lines: "A product in your cart is no longer available",
+      throw new CheckoutError("Một sản phẩm trong giỏ không còn bán.", 409, {
+        lines: "Một sản phẩm trong giỏ không còn bán",
       });
     }
     if (isSoldOut(product)) {
-      throw new CheckoutError(`${product.name} is out of stock.`, 409, { lines: `${product.name} is out of stock` });
+      throw new CheckoutError(`${product.name} đã hết hàng.`, 409, { lines: `${product.name} đã hết hàng` });
     }
     const maxQty = maxOrderableQuantity(product);
     if (wanted.quantity > maxQty) {
-      throw new CheckoutError(`Only ${maxQty} of ${product.name} left in stock.`, 409, {
-        lines: `Only ${maxQty} of ${product.name} left in stock`,
+      throw new CheckoutError(`${product.name} chỉ còn ${maxQty} sản phẩm.`, 409, {
+        lines: `${product.name} chỉ còn ${maxQty} sản phẩm`,
       });
     }
     lines.push({
@@ -178,8 +254,24 @@ export async function startCheckout(
       unitPriceVnd: product.priceVnd,
       quantity: wanted.quantity,
     });
-    amountVnd += product.priceVnd * wanted.quantity; // server-side price, never from the browser
+    goodsVnd += product.priceVnd * wanted.quantity; // server-side price, never from the browser
   }
+
+  // Where it is going. Three ids from the browser become names and codes out of Sapo's own tables,
+  // and a ward that does not sit in that district is refused here rather than shipped nowhere.
+  const address = await resolveAddress(input.provinceId, input.districtId, input.wardId);
+  if (address === undefined) {
+    throw new CheckoutError("Địa chỉ giao hàng không hợp lệ. Hãy chọn lại tỉnh/thành, quận/huyện và phường/xã.", 400, {
+      wardId: "Hãy chọn lại địa chỉ",
+    });
+  }
+
+  const totals = await resolveTotals(sapo, {
+    goodsVnd,
+    totalUnits: lines.reduce((n, l) => n + l.quantity, 0),
+    provinceId: address.provinceId,
+    discountCode: input.discountCode,
+  });
 
   const store = getOrderStore();
 
@@ -188,31 +280,208 @@ export async function startCheckout(
   let txnRef = createTxnRef();
   for (let attempt = 0; attempt < 5 && (await store.has(txnRef)); attempt++) txnRef = createTxnRef();
 
-  // Deliberately not guarded: if the store cannot record the order we must not hand out a payment
-  // URL, because the IPN would later have nothing to confirm. The route turns this into a 500.
-  await store.put({
+  const order: PendingOrder = {
     txnRef,
     createdAt: new Date().toISOString(),
-    customer: { name: input.name, phone: input.phone, email: input.email, address: input.address },
+    customer: {
+      name: input.name,
+      phone: input.phone,
+      email: input.email,
+      address: input.address,
+      ward: address.ward,
+      wardCode: address.wardCode,
+      district: address.district,
+      districtCode: address.districtCode,
+      province: address.province,
+      provinceCode: address.provinceCode,
+      provinceId: address.provinceId,
+    },
     lines,
-    amountVnd,
+    goodsVnd: totals.goodsVnd,
+    discount:
+      totals.discount !== undefined
+        ? { code: totals.discount.code, amountVnd: totals.discount.amountVnd, summary: totals.discount.summary }
+        : undefined,
+    shipping: { title: totals.shipping.title, code: totals.shipping.code, priceVnd: totals.shipping.feeVnd },
+    amountVnd: totals.totalVnd,
+    paymentMethod: input.paymentMethod,
     status: "pending",
-  });
+  };
 
-  const paymentUrl = createPaymentUrl(vnpay, {
-    txnRef,
-    amountVnd,
-    orderInfo: `Thanh toan don hang ${txnRef}`,
-    ipAddr,
-  });
+  // Deliberately not guarded: if the store cannot record the order we must not hand out a payment
+  // URL, because the IPN would later have nothing to confirm. The route turns this into a 500.
+  await store.put(order);
+
   log.info("checkout.created", {
     txnRef,
-    amountVnd,
+    method: input.paymentMethod,
+    goodsVnd: totals.goodsVnd,
+    discountVnd: totals.discount?.amountVnd ?? 0,
+    shippingVnd: totals.shipping.feeVnd,
+    amountVnd: totals.totalVnd,
+    province: address.province,
     lines: lines.length,
     units: lines.reduce((n, l) => n + l.quantity, 0),
     store: store.kind,
   });
-  return { txnRef, paymentUrl };
+
+  if (input.paymentMethod === "cod") return placeCodOrder(order);
+
+  const paymentUrl = createPaymentUrl(vnpay as NonNullable<typeof vnpay>, {
+    txnRef,
+    // The one amount: the same number the summary showed and the same number Sapo will be told.
+    amountVnd: totals.totalVnd,
+    orderInfo: `Thanh toan don hang ${txnRef}`,
+    ipAddr,
+  });
+  return { method: "vnpay", txnRef, paymentUrl };
+}
+
+/**
+ * Goods → discount → shipping → total, in that order, and the order matters.
+ *
+ * The discount applies to the goods, and the shipping threshold is then tested against what is
+ * left: a code that drops the basket below the free-delivery line also drops the free delivery.
+ * The alternative — waive delivery on the pre-discount figure — lets a customer stack a code on a
+ * just-qualifying basket and get both, which is the shop paying twice for one sale.
+ *
+ * Exported through `quoteTotals` so the checkout page can show the same numbers without a second
+ * implementation.
+ */
+async function resolveTotals(
+  sapo: ReturnType<typeof getSapoConfig>,
+  args: { goodsVnd: number; totalUnits: number; provinceId: number; discountCode?: string },
+): Promise<OrderTotals> {
+  let discount: DiscountQuote | undefined;
+  if (args.discountCode !== undefined) {
+    try {
+      discount = await quoteDiscount(sapo, args.discountCode, {
+        goodsSubtotalVnd: args.goodsVnd,
+        totalUnits: args.totalUnits,
+      });
+    } catch (err) {
+      if (err instanceof DiscountRejected) {
+        // Refused, not dropped. Silently continuing without the discount would charge the customer
+        // more than the page they are looking at says — the one outcome worse than a rejection.
+        log.info("discount.rejected", { reason: err.reason });
+        throw new CheckoutError(err.message, 409, { discountCode: err.message });
+      }
+      throw err;
+    }
+  }
+
+  const afterDiscount = Math.max(0, args.goodsVnd - (discount?.amountVnd ?? 0));
+  const shipping = quoteShipping(args.provinceId, afterDiscount);
+  return { goodsVnd: args.goodsVnd, discount, shipping, totalVnd: afterDiscount + shipping.feeVnd };
+}
+
+/**
+ * Price a cart without starting a checkout, for the summary on the checkout page.
+ *
+ * Same function the real checkout uses, so what the customer reads is what they will be charged.
+ * It takes the cart as quantities and reprices from Sapo, exactly like `startCheckout`.
+ */
+export async function quoteTotals(args: {
+  lines: CartLine[];
+  provinceId?: number;
+  discountCode?: string;
+}): Promise<OrderTotals | undefined> {
+  const sapo = getSapoConfig();
+  if (args.provinceId === undefined) return undefined;
+  const catalog = await getDisplayProducts();
+  const byVariant = new Map<number, DisplayProduct>();
+  for (const p of catalog) if (p.variantId !== undefined) byVariant.set(p.variantId, p);
+
+  let goodsVnd = 0;
+  let totalUnits = 0;
+  for (const wanted of args.lines) {
+    const product = byVariant.get(wanted.variantId);
+    if (product === undefined) continue; // the checkout itself refuses this; a quote just skips it
+    goodsVnd += product.priceVnd * wanted.quantity;
+    totalUnits += wanted.quantity;
+  }
+  return resolveTotals(sapo, { goodsVnd, totalUnits, provinceId: args.provinceId, discountCode: args.discountCode });
+}
+
+// ---------------------------------------------------------------------------
+// COD: the second, and only other, place a Sapo order is created
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the Sapo order for a cash-on-delivery checkout, right now, unpaid.
+ *
+ * This is the second door into Sapo, and the reason security rule 2 had to be rewritten rather than
+ * bent. The old rule — "only a checksum-verified IPN may create an order" — exists because for a
+ * *card* payment, anything else would let an unpaid order look paid. COD has no payment to verify
+ * at all, so the rule it needs is a different one, and both now stand side by side:
+ *
+ * - A VNPAY order is created **only** by `handleIpn`, and only ever as `financial_status: paid`.
+ * - A COD order is created here, **only** as `financial_status: pending`, and never carries a
+ *   transaction. Nothing on this path can mark an order paid; no amount of calling it can produce
+ *   a false payment record, only an unpaid order a human will confirm by phone.
+ *
+ * What it can produce is junk orders, which is what the rate limit on `/api/checkout` is for.
+ * `createOrderOnce` keeps a retry from doubling an order, as it does for the IPN.
+ */
+async function placeCodOrder(order: PendingOrder): Promise<CheckoutStarted> {
+  const store = getOrderStore();
+  const sapo = getSapoConfig();
+  try {
+    const { order: sapoOrder, created } = await createOrderOnce(sapo, toSapoInput(order));
+    order.sapoOrder = sapoOrder;
+    order.status = "completed";
+    await store.put(order);
+    log.info(created ? "cod.order_created" : "cod.order_already_existed", {
+      txnRef: order.txnRef,
+      sapoOrderId: sapoOrder.id,
+      sapoOrderName: sapoOrder.name,
+      amountVnd: order.amountVnd,
+    });
+    return { method: "cod", txnRef: order.txnRef, sapoOrder };
+  } catch (err) {
+    order.status = "sapo_error";
+    order.lastError = errorMessage(err);
+    const e = err as { status?: number; body?: string };
+    log.error("cod.order_failed", { txnRef: order.txnRef, error: order.lastError, status: e.status, body: e.body });
+    try {
+      await store.put(order);
+    } catch (persistErr) {
+      log.error("cod.store_write_failed", { txnRef: order.txnRef, error: errorMessage(persistErr) });
+    }
+    // No money has moved, so the honest answer is to fail the checkout and let the customer retry.
+    throw new CheckoutError("Không tạo được đơn hàng. Vui lòng thử lại.", 502);
+  }
+}
+
+/**
+ * The stored order, as Sapo wants it. One place, so a VNPAY order and a COD order can never
+ * disagree about how a cart becomes a payload.
+ */
+function toSapoInput(order: PendingOrder, params?: VnpParams): SapoOrderInput {
+  const c = order.customer;
+  return {
+    txnRef: order.txnRef,
+    method: order.paymentMethod ?? "vnpay",
+    vnpTransactionNo: params?.vnp_TransactionNo ?? order.vnpTransactionNo,
+    vnpBankCode: params?.vnp_BankCode,
+    vnpPayDate: params?.vnp_PayDate,
+    customer: {
+      name: c.name,
+      phone: c.phone,
+      email: c.email,
+      address1: c.address,
+      ward: c.ward,
+      wardCode: c.wardCode,
+      district: c.district,
+      districtCode: c.districtCode,
+      province: c.province,
+      provinceCode: c.provinceCode,
+    },
+    lines: order.lines,
+    shipping: order.shipping,
+    discount: order.discount !== undefined ? { code: order.discount.code, amountVnd: order.discount.amountVnd } : undefined,
+    totalVnd: order.amountVnd,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -337,14 +606,11 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
 
   try {
     const sapo = getSapoConfig();
+    // A VNPAY IPN always creates a VNPAY order, whatever the stored record says: this is the paid
+    // path, and nothing reached it without a checksum-verified payment for this exact reference.
     const { order: sapoOrder, created } = await createOrderOnce(sapo, {
-      txnRef,
-      vnpTransactionNo: params.vnp_TransactionNo ?? "",
-      vnpBankCode: params.vnp_BankCode,
-      vnpPayDate: params.vnp_PayDate,
-      customer: order.customer,
-      lines: order.lines,
-      totalVnd: order.amountVnd,
+      ...toSapoInput(order, params),
+      method: "vnpay",
     });
     order.sapoOrder = sapoOrder;
     order.status = "completed";
@@ -395,4 +661,101 @@ export function classifyReturn(params: VnpParams): { outcome: ReturnOutcome; txn
   if (isPaymentSuccess(params)) return { outcome: "success", txnRef, code };
   if (code === CANCELLED_RESPONSE_CODE) return { outcome: "cancelled", txnRef, code };
   return { outcome: "failed", txnRef, code };
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+/** One policy: how many hits of this kind an IP may make, and over how long. */
+export interface RatePolicy {
+  limit: number;
+  windowSeconds: number;
+}
+
+/**
+ * Policies live here rather than in the routes, so the numbers can be read in one place and
+ * compared against each other.
+ *
+ * `checkout` is the one that matters: with COD, a request on that route creates a real Sapo order,
+ * so an unthrottled endpoint is a way to fill the shop's order list with rubbish. `discount` is
+ * about guessing codes — it is also the only place where a slow Sapo lookup is triggered by an
+ * anonymous caller. `lookup` protects customer data: an order reference plus a phone number is the
+ * key to someone's address, so it gets the tightest window.
+ */
+export const RATE_POLICIES = {
+  checkout: { limit: 10, windowSeconds: 600 },
+  discount: { limit: 20, windowSeconds: 600 },
+  lookup: { limit: 10, windowSeconds: 900 },
+} as const satisfies Record<string, RatePolicy>;
+
+/**
+ * Count one request and say whether it is over the line.
+ *
+ * Fails **open**: a store that cannot be reached must not take checkout down with it. A rate limit
+ * is a guard against nuisance, and trading away the ability to sell to keep it is the wrong trade.
+ */
+export async function overRateLimit(kind: keyof typeof RATE_POLICIES, ip: string): Promise<boolean> {
+  const policy = RATE_POLICIES[kind];
+  try {
+    const count = await getOrderStore().hit(`${kind}:${ip}`, policy.windowSeconds);
+    if (count > policy.limit) {
+      log.warn("rate.limited", { kind, count, limit: policy.limit });
+      return true;
+    }
+    return false;
+  } catch (err) {
+    log.warn("rate.check_failed", { kind, error: errorMessage(err) });
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Customer-facing order lookup (T7.6)
+// ---------------------------------------------------------------------------
+
+export type OrderLookupResult =
+  | { outcome: "found"; order: SapoOrderDetail; paymentMethod: PaymentMethod }
+  | { outcome: "not_found" }
+  | { outcome: "rate_limited" };
+
+/** Compare the last 9 digits, so +84 / 84 / 0 prefixes of the same number match. */
+function samePhone(a: string, b: string): boolean {
+  const tail = (s: string) => s.replace(/\D+/g, "").slice(-9);
+  const x = tail(a);
+  return x.length === 9 && x === tail(b);
+}
+
+/**
+ * Find a customer's order from the reference and the phone number on it.
+ *
+ * The phone number is the whole access check, so two things are deliberate. A wrong phone answers
+ * exactly like a reference that does not exist — otherwise the page becomes an oracle for which
+ * references are real — and the attempt is counted against the caller's IP whether it succeeded or
+ * not, so the pair cannot be brute-forced. A reference is a timestamp plus six digits, which is
+ * guessable given enough tries; this is what makes "enough tries" not happen.
+ */
+export async function lookupOrder(txnRef: string, phone: string, ip: string): Promise<OrderLookupResult> {
+  if (await overRateLimit("lookup", ip)) return { outcome: "rate_limited" };
+
+  const ref = txnRef.trim();
+  if (!/^[0-9]{6,40}$/.test(ref)) return { outcome: "not_found" };
+
+  const detail = await fetchOrderDetailByRef(getSapoConfig(), ref);
+  if (detail === null) {
+    log.info("lookup.miss", { reason: "no_order" });
+    return { outcome: "not_found" };
+  }
+  if (!samePhone(detail.phoneDigits, phone)) {
+    log.info("lookup.miss", { reason: "phone_mismatch", sapoOrderId: detail.id });
+    return { outcome: "not_found" };
+  }
+
+  // Which path placed it, read from the record rather than guessed from the status: a COD order
+  // that has since been paid in cash is "paid" in Sapo and still was never a card payment.
+  const stored = await getOrderStore()
+    .get(ref)
+    .catch(() => undefined);
+  log.info("lookup.hit", { sapoOrderId: detail.id });
+  return { outcome: "found", order: detail, paymentMethod: stored?.paymentMethod ?? "vnpay" };
 }
