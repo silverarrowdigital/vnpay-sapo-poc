@@ -237,6 +237,13 @@ delivery 25,000:
 - **Stock moves on a COD order too** (115 → 114 on a quantity of 1), because the line carries a
   `variant_id` and the payload sends `inventory_behaviour`. That is right for COD — the goods are
   committed — but it means **a cancelled COD order needs a manual restock**.
+- **A variant's `inventory_quantity` is "có thể bán" (available), not "tồn kho" (on hand).** Verified
+  2026-10-05: the admin showed on hand 119 and available 114 for `TEST-005` while the API returned
+  `inventory_quantity: 114`; the gap was exactly the 5 units committed by open, unfulfilled order
+  #1024 (`fulfillable_quantity: 5`). Available is the right number to sell against and is what
+  `maxOrderableQuantity` already reads — on hand would oversell goods already promised to an open
+  order. It also means **a stock correction is made against on hand**, which is the only one of the
+  two the admin lets you edit; available then recomputes itself.
 - **`DELETE /admin/orders/{id}.json` does not restock and does not decrement `times_used`.**
   Verified on the same order: deleting it left stock at 114 and the code's usage at 1. A deleted
   test order is not an undone test order.
