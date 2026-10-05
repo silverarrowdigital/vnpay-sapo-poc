@@ -1,5 +1,6 @@
 import CheckoutForm from "@/components/CheckoutForm";
 import { getDisplayProducts } from "@/lib/catalog";
+import { getDiscountsEnabled } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -26,7 +27,8 @@ export default async function CheckoutPage() {
   return (
     <div className="mx-auto w-full max-w-[1416px] px-4 py-10">
       <h1 className="font-display mb-10 text-[clamp(2rem,5vw,3.5rem)] leading-tight font-normal">Thanh toán</h1>
-      <CheckoutForm catalog={catalog} />
+      {/* Read on the server: the switch is an env var, and the form must not have to ask for it. */}
+      <CheckoutForm catalog={catalog} discountsEnabled={getDiscountsEnabled()} />
     </div>
   );
 }

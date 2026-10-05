@@ -6,7 +6,7 @@
  * That module also owns the cross-instance claim this file relies on to keep two concurrent IPNs
  * from both creating a Sapo order. Sapo's own lookup in `createOrderOnce` is the second guard.
  */
-import { getSapoConfig, getVnpayConfig } from "./config";
+import { getDiscountsEnabled, getSapoConfig, getVnpayConfig } from "./config";
 import { DiscountRejected, quoteDiscount, normaliseCode, type DiscountQuote } from "./discount";
 import { errorMessage, log } from "./log";
 import { resolveAddress } from "./locations";
@@ -372,6 +372,14 @@ async function resolveTotals(
   args: { goodsVnd: number; totalUnits: number; provinceId: number; discountCode?: string },
 ): Promise<OrderTotals> {
   let discount: DiscountQuote | undefined;
+  if (args.discountCode !== undefined && !getDiscountsEnabled()) {
+    // Refused, not ignored — for the same reason a rejected code is refused: charging more than the
+    // page showed is the one outcome worse than saying no.
+    log.info("discount.disabled", {});
+    throw new CheckoutError("Hiện chưa áp dụng mã giảm giá.", 409, {
+      discountCode: "Hiện chưa áp dụng mã giảm giá",
+    });
+  }
   if (args.discountCode !== undefined) {
     try {
       discount = await quoteDiscount(sapo, args.discountCode, {

@@ -142,22 +142,36 @@ một tag `combo-<sku>`, để vẫn tra cứu được đơn nào là combo. Ph
 **Nghiệm thu**: một đơn API cho 1 combo làm giảm đúng 1 mỗi thành phần; `total_available` của combo
 giảm 1; tổng đơn trong Sapo bằng đúng số VNPAY thu, không lệch một đồng.
 
-### T8.3 — Chặn đường cũ lại *(1–2 giờ, làm ngay sau khi chọn được nhánh)*
+### T8.3 — Chặn đường cũ lại — **✅ ĐÃ LÀM 2026-10-05**
+
+Đã làm trước các bước khác, vì shop **không đặt được sản phẩm về `draft`** trong Sapo nên không có
+cách nào chặn bằng cấu hình. `lib/catalog.ts` `isSellable` giữ mọi variant combo ở ngoài catalog:
+nó không xuất hiện trên web, trang sản phẩm trả 404 (cả theo alias và theo variantId), và một giỏ
+hàng đã chứa combo từ trước — giỏ nằm trong `localStorage` nên chuyện này xảy ra thật — bị bác ở
+checkout với `409`. Chế độ `SAPO_VARIANT_ID` cũng đi qua cùng cái cổng đó, nếu không thì ghim shop
+vào một combo sẽ mở lại đúng lỗ vừa bịt.
+
+Verify: catalog còn 5 sản phẩm, không có combo; `/products/230254166` → 404; checkout với
+`variantId: 230254166` → 409.
+
+Bước này **không** cần đợi T8.0, và nó là lý do T8.0 không còn gấp: không còn đơn combo nào vào nữa.
+
+### T8.3b — Khi đã sửa xong thì mở lại *(1–2 giờ)*
 
 Dù đi nhánh nào, phải có một rào không cho âm thầm quay lại tình trạng hôm nay: nếu một dòng giỏ trỏ
 tới variant có `type: "combo"` / `requires_components: true` mà code **chưa** xử lý nở combo, thì
 `/api/checkout` **từ chối** dòng đó thay vì tạo một đơn không trừ kho.
 
-Điều này cần `lib/catalog.ts` mang thêm cờ combo từ Sapo (`type`, `requires_components`) vào
-`CatalogProduct` — hiện đang bị bỏ đi.
+Khi T8.1 hoặc T8.2 xong, bỏ `isSellable` để combo quay lại web — và giữ lại phép kiểm ở checkout
+làm lớp thứ hai.
 
-**Nghiệm thu**: xoá cấu hình nở combo → mua combo trả `409` với lời giải thích, chứ không tạo đơn.
+**Nghiệm thu**: mua một combo làm giảm đúng 1 mỗi thành phần, và tổng đơn Sapo bằng số VNPAY thu.
 
 ### T8.4 — Chốt kho sau giai đoạn thử *(việc của bạn)*
 
-Hiện còn hai sai số đã biết, cả hai do đơn test của Claude và xoá đơn không hoàn kho:
-`TESTCOMBO-001` cần **+1** (37 → 38) và `TEST-002` cần **+1** (37 → 38). Sửa ở **tồn kho**, không
-phải "có thể bán" — xem `CLAUDE.md` mục tồn kho.
+**✅ XONG 2026-10-05.** `TEST-002` đã được sửa về **38**, và `TESTCOMBO-001` tự về 38 theo — vì tồn
+combo là số dẫn xuất, không phải số lưu riêng (lời khuyên ban đầu "cộng +1 cho combo" là sai và đã
+sửa lại). Đơn combo `#1034` không nợ kho gì, vì nó không làm kho di chuyển.
 
 ---
 

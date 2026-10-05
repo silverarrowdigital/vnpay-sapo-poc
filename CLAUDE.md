@@ -120,6 +120,7 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SAPO_STORE_DOMAIN` | yes | e.g. `your-store.mysapo.net` |
 | `SAPO_API_KEY` / `SAPO_API_SECRET` | yes | Sapo Private App credentials, Orders read+write |
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
+| `DISCOUNTS_ENABLED` | no | `false` stops every discount code being honoured, within one request and with no deploy. An operational kill switch: the codes live in Sapo and this app has read-only access to them on purpose, so there is otherwise no way from here to retire one. Default on |
 | `SAPO_SEND_RECEIPT` | no | `true` asks Sapo to email the customer its own order confirmation. Off by default on purpose — see below |
 | `VNPAY_QUERYDR_URL` | no | Override for the `querydr` endpoint used by `npm run querydr` and `npm run refund` (same endpoint). Defaults to the sandbox one |
 | `VNPAY_REFUND_CREATE_BY` | no | Who a refund is recorded as being requested by (`vnp_CreateBy`). Defaults to `shop-admin` |
@@ -259,8 +260,12 @@ Verified 2026-10-05; full write-up and plan in `docs/plan/T8-combo-ton-kho.md`.
   with the derived availability this means **selling combos never reduces the combo's availability** —
   sell 37, it still says 37, forever. No error, no warning, no log line: the shop's books drift by
   one combo per combo sold. Until `docs/plan/T8-combo-ton-kho.md` § T8.3 ships, the safe move is to
-  set the combo product to `draft` in Sapo, which removes it from the storefront immediately
-  (only `status: "active"` is listed) with no deploy.
+  withhold combos from the catalog, which is what `lib/catalog.ts` `isSellable` now does: a combo
+  variant never reaches the storefront, its product page 404s, and a cart that already held one (it
+  lives in `localStorage`) is refused at checkout. Setting the product to `draft` in Sapo would do
+  the same and was the first choice, but that store does not offer it. Verified 2026-10-05 on a
+  single unit too: order #1034 paid 385,000₫ for one combo and all three components stayed at
+  114 / 38 / 61, with `combination_lines: []` — Sapo never expanded it.
 
 **Sapo's administrative divisions are the pre-2025 map, and the table is an accretion rather than a
 snapshot.** Verified 2026-10-05, and it decides how addresses work:
@@ -607,7 +612,10 @@ run**, so the response codes above are from the docs, not from this terminal.
 - **A rejected COD attempt still spends a rate-limit hit**, because the counter runs before the cart
   is priced. That is the point — probing must not be free — but it means a customer refused for stock
   reasons has fewer tries left.
-- **Combo products are sellable but do not move stock** — see the Sapo section and
+- **Combo products are withheld from the storefront** (`lib/catalog.ts` `isSellable`) because selling
+  one moves no stock. The read path was always correct — Sapo reports the derived availability — it
+  is the write path that does nothing.
+- **Combo products, if that filter is removed, do not move stock** — see the Sapo section and
   `docs/plan/T8-combo-ton-kho.md`. The storefront shows the correct availability; the order simply
   never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.

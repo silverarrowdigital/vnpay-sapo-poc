@@ -16,8 +16,35 @@
  * from the hardcoded `PRODUCT` with stock untracked.
  */
 import { getSapoConfig } from "./config";
+import { log } from "./log";
 import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from "./sapo";
 import { PRODUCT, type CatalogProduct, type DisplayProduct } from "./product";
+
+/**
+ * Combo products are withheld from the storefront.
+ *
+ * **Not a style choice — selling one is a book-keeping error.** A combo variant has no stock of its
+ * own (its availability is `min(component stock / quantity needed)`) and
+ * `POST /admin/orders.json` does not expand it into components, so an order for a combo takes the
+ * money, ships three real items, and leaves every stock figure untouched. Because availability is
+ * derived from components that never move, **selling combos never reduces the number shown** — it
+ * says 37 forever. Measured on a live store on 2026-10-05, twice: once with 40 units, once with a
+ * single unit (order #1034).
+ *
+ * Setting the product to `draft` in Sapo would have the same effect and was the first choice, but
+ * that store does not offer it. So the line is held here instead, and `docs/plan/T8-combo-ton-kho.md`
+ * carries the plan for selling them properly. When that ships, this filter goes.
+ *
+ * It is deliberately a filter over the catalog rather than a refusal at checkout: a product nobody
+ * can see is better than one a customer configures and is turned away from at the last step. The
+ * checkout refusal still exists as the second layer, because a cart lives in `localStorage` and may
+ * already hold a combo from before this shipped.
+ */
+function isSellable(entry: SapoCatalogEntry): boolean {
+  if (!entry.requiresComponents) return true;
+  log.warn("catalog.combo_withheld", { variantId: entry.variantId, sku: entry.sku });
+  return false;
+}
 
 function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
   return {
@@ -45,9 +72,13 @@ function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
 export async function getDisplayProducts(): Promise<CatalogProduct[]> {
   const cfg = getSapoConfig(); // throws MissingEnvError when not configured
   if (cfg.variantId !== undefined) {
-    return [toCatalogProduct(await fetchCatalogEntry(cfg, cfg.variantId))];
+    // The pinned-variant mode goes through the same gate: SAPO_VARIANT_ID pointing at a combo is a
+    // misconfiguration, and an empty catalog is the safe reading of it. The logged warning from
+    // isSellable names the variant.
+    const entry = await fetchCatalogEntry(cfg, cfg.variantId);
+    return isSellable(entry) ? [toCatalogProduct(entry)] : [];
   }
-  return (await fetchCatalogEntries(cfg)).map(toCatalogProduct);
+  return (await fetchCatalogEntries(cfg)).filter(isSellable).map(toCatalogProduct);
 }
 
 /**
@@ -79,5 +110,12 @@ export async function getDisplayProduct(): Promise<DisplayProduct> {
       source: "fallback",
     };
   }
-  return toCatalogProduct(await fetchCatalogEntry(cfg, cfg.variantId));
+  const entry = await fetchCatalogEntry(cfg, cfg.variantId);
+  if (!isSellable(entry)) {
+    // Nothing honest to return: the fallback PRODUCT would be the wrong name and the wrong price,
+    // and the real entry cannot be sold without mis-stating stock. Callers already handle a Sapo
+    // failure by saying the catalog is unavailable, which is exactly what this is.
+    throw new Error(`SAPO_VARIANT_ID ${cfg.variantId} is a combo (${entry.sku}); see docs/plan/T8-combo-ton-kho.md`);
+  }
+  return toCatalogProduct(entry);
 }

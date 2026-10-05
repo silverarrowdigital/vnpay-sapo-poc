@@ -115,6 +115,24 @@ export function getSapoConfig(): SapoConfig {
   return { storeDomain, apiKey: env.SAPO_API_KEY, apiSecret: env.SAPO_API_SECRET, variantId, sendReceipt };
 }
 
+/**
+ * Whether the storefront honours discount codes at all. **On unless explicitly turned off.**
+ *
+ * An operational kill switch, not a feature flag. The codes live in Sapo and this app has
+ * **read-only** access to them on purpose (T7.0), so there is no way from here to retire a code
+ * that should no longer exist — and a store that cannot delete the rule in its own admin would
+ * otherwise have no way to stop it either. Setting `DISCOUNTS_ENABLED=false` stops every code being
+ * honoured within one request, with no deploy.
+ *
+ * Default is **on** so that reading this variable changes nothing by itself: turning a working
+ * feature off silently is not a decision code should make for a shop.
+ *
+ * Deleting the rule in Sapo is still the better fix. This is for when that is not available yet.
+ */
+export function getDiscountsEnabled(): boolean {
+  return read("DISCOUNTS_ENABLED")?.toLowerCase() !== "false";
+}
+
 export interface SanityConfig {
   projectId: string;
   dataset: string;

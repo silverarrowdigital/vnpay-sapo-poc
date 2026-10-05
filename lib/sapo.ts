@@ -29,6 +29,10 @@ export class SapoApiError extends Error {
 /** Raw shape of the bits of /admin/products.json we use. */
 interface SapoVariant {
   id: number;
+  /** "normal" | "combo" (observed live). A combo is assembled from other variants. */
+  type?: string | null;
+  /** True on a combo variant: it has no stock of its own, only its components'. */
+  requires_components?: boolean | null;
   sku?: string | null;
   price?: number | string | null;
   compare_at_price?: number | string | null;
@@ -91,6 +95,15 @@ export interface SapoCatalogEntry {
   unit?: string;
   description?: string;
   imageUrl?: string;
+  /**
+   * A combo: a variant assembled from other variants (`type: "combo"`,
+   * `requires_components: true`). Carried through because **selling one deducts nothing** —
+   * its stock is derived from its components and `POST /admin/orders.json` does not expand it,
+   * so an order for a combo takes money and leaves the shop's stock untouched. See
+   * docs/plan/T8-combo-ton-kho.md. Until that is solved, `lib/catalog.ts` keeps combos out of
+   * the catalog entirely.
+   */
+  requiresComponents: boolean;
 }
 
 /**
@@ -114,6 +127,7 @@ function toCatalogEntry(product: SapoProduct, variant: SapoVariant): SapoCatalog
     unit: variant.unit?.trim() || undefined,
     description: htmlToText(product.content),
     imageUrl: image ?? undefined,
+    requiresComponents: variant.requires_components === true || (variant.type ?? "").toLowerCase() === "combo",
   };
 }
 

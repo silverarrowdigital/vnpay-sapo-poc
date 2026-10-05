@@ -30,16 +30,29 @@ export const FREE_SHIPPING_THRESHOLD_VND = 500_000;
 
 export type ShippingZone = "metro" | "zone1" | "zone2";
 
+/**
+ * **The shop's numbers, set 2026-10-05: a flat 30,000₫ everywhere.**
+ *
+ * The three zones are therefore all the same today, which makes the zoning look pointless — and it
+ * is kept anyway, deliberately. The structure costs nothing at runtime, and the day the shop wants
+ * to charge Hà Nội differently from Cà Mau, the change is three numbers here rather than a rewrite
+ * of how a fee is decided. Flattening it now would mean rebuilding it later.
+ */
 const ZONE_FEE_VND: Record<ShippingZone, number> = {
-  metro: 25_000,
-  zone1: 35_000,
-  zone2: 45_000,
+  metro: 30_000,
+  zone1: 30_000,
+  zone2: 30_000,
 };
 
+/**
+ * Shown to the customer beside the fee. While every zone costs the same, naming the zone would
+ * invite the question "why does my zone matter then" — so all three read the same sentence, and the
+ * labels become distinct again the moment the fees do.
+ */
 const ZONE_LABEL: Record<ShippingZone, string> = {
-  metro: "Nội thành Hà Nội / TP Hồ Chí Minh",
-  zone1: "Các tỉnh lân cận hai thành phố lớn",
-  zone2: "Các tỉnh còn lại",
+  metro: "Giao toàn quốc, phí như nhau",
+  zone1: "Giao toàn quốc, phí như nhau",
+  zone2: "Giao toàn quốc, phí như nhau",
 };
 
 /** Hà Nội, TP Hồ Chí Minh. */

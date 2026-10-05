@@ -50,7 +50,14 @@ type PaymentMethod = "vnpay" | "cod";
  * In development the server also names the env vars it could not read (never their values), which
  * is the fastest way to diagnose a misconfigured `.env.local`.
  */
-export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] }) {
+export default function CheckoutForm({
+  catalog,
+  discountsEnabled = true,
+}: {
+  catalog: CatalogProduct[];
+  /** False hides the code box entirely. The server refuses codes either way; this is the UI half. */
+  discountsEnabled?: boolean;
+}) {
   const { lines, setQuantity, remove } = useCart();
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -426,6 +433,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
           })}
         </ul>
 
+        {discountsEnabled && (
         <div className="mt-5 border-b border-line pb-5">
           <label htmlFor="discountCode" className="mb-1 block text-xs tracking-wide uppercase">
             Mã giảm giá
@@ -471,6 +479,7 @@ export default function CheckoutForm({ catalog }: { catalog: CatalogProduct[] })
             </p>
           )}
         </div>
+        )}
 
         <dl className="m-0 mt-5 grid grid-cols-[1fr_auto] gap-y-2 text-sm">
           <dt className="m-0">Tạm tính</dt>
