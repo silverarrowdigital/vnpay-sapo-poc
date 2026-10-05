@@ -3,9 +3,17 @@
 **Trạng thái: CHỜ XÁC NHẬN — chưa có dòng code nào.** Tài liệu này là kế hoạch; việc viết code chỉ bắt đầu
 sau khi chủ shop trả lời các câu ở mục "Cần bạn chốt" và nhắn "bắt đầu".
 
+**Đã chốt 2026-10-05:** chủ shop chọn **theo khuyến nghị cho cả 4 câu** ở mục "Cần bạn chốt". Vẫn **chưa
+bắt đầu code**: còn chờ B1 (sản phẩm thử trong Sapo) và lời nhắn "bắt đầu".
+
 **Phạm vi:** cho phép một sản phẩm có nhiều lựa chọn (ví dụ `95g ~ 32 Servings`, `200g ~ 66 Servings`,
 …), mỗi lựa chọn có giá, tồn kho, SKU riêng. Sản phẩm không có lựa chọn thì chạy y như bây giờ.
-Không đụng thanh toán, VNPAY, Redis, Sanity.
+Không đổi cách tính tiền, VNPAY, Redis, Sanity — **nhưng có sửa code nằm trên đường tiền**:
+`lib/order.ts` (`startCheckout`, `quoteTotals`) và `lib/sapo.ts` đổi sang chỉ mục phẳng, nên `reviewer`
+là **bắt buộc** (CLAUDE.md bước 6), không được bỏ qua dù thay đổi trông nhỏ.
+
+**Đã rà soát với code ngày 2026-10-05** (đối chiếu từng giả định của bản kế hoạch đầu với mã nguồn);
+những chỗ bản đầu sai hoặc thiếu đã được sửa trong tài liệu này và đánh dấu *(sửa sau rà soát)*.
 
 ---
 
@@ -37,6 +45,9 @@ Nguồn: HTML của `thehourtea.com/products/tra-ba-tuoc-oai-huong-lavender-earl
   nhãn thật thì đơn trong Sapo tự hiện đúng nhãn.
 - **Mã hiện tại chỉ lấy variant đầu theo `position`** (`firstVariant` trong `lib/sapo.ts`), nên một sản phẩm
   có 4 size sẽ chỉ bán được size đầu và hai-ba size còn lại không thể mua.
+- *(sửa sau rà soát)* **Kiểu `SapoVariant` trong code chưa khai báo `option1/2/3`** (`lib/sapo.ts:30-44`) và
+  `SapoCatalogEntry` không có trường nhãn. Dữ liệu có sẵn ở Sapo (đọc 2026-10-05), nhưng code chưa đọc nó:
+  thêm vào kiểu là việc của P1, không phải "đã có".
 
 ---
 
@@ -63,6 +74,24 @@ Nhãn lựa chọn lấy từ `option1 / option2 / option3` nối bằng ` / `, 
    sẽ bị báo "không còn bán" (409)**. Cách làm: tách hai thứ — danh mục *để hiển thị* (một sản phẩm, nhiều
    variant) và chỉ mục *để tính tiền* (phẳng, mọi variant bán được). Thanh toán, báo giá, ngăn kéo giỏ hàng
    chỉ đọc chỉ mục phẳng.
+   *(sửa sau rà soát)* Hiện **không có chỉ mục nào để "giữ nguyên"**: map `variantId → sản phẩm` được dựng
+   tại chỗ, hai lần riêng rẽ — `startCheckout` (`lib/order.ts:235-248`, thiếu thì 409) và `quoteTotals`
+   (`lib/order.ts:418-426`). Làm thành **một hàm dùng chung** cho cả hai. Lưu ý `quoteTotals` hiện **âm thầm
+   bỏ qua** variant không có trong danh mục: với nhiều size, một chỉ mục lệch sẽ cho bản báo giá **thấp hơn
+   thực tế** trong khi checkout lại 409. Đổi nó thành báo lỗi, không bỏ qua.
+   `getDisplayProducts()` hiện là nguồn dữ liệu duy nhất của checkout, quote, ngăn kéo giỏ, trang thanh toán,
+   trang chủ và sitemap — đổi hình dạng của nó là đổi cả sáu nơi cùng lúc, nên P1 phải liệt kê và sửa đủ.
+1a. *(sửa sau rà soát)* **Trùng alias.** Các variant của một sản phẩm có chung `alias`.
+   `getProductByHandle` dùng `find(p => p.alias === handle)` (`lib/catalog.ts:92-99`) nên luôn trả variant đầu;
+   trang chủ (`app/page.tsx:66-69`) và `app/sitemap.ts:28-34` sẽ hiện **mỗi sản phẩm nhiều lần** nếu lặp trên
+   danh mục phẳng. Trang chủ, sitemap và `getProductByHandle` phải chuyển sang danh mục **hiển thị** (một
+   sản phẩm → nhiều variant); chỉ checkout/quote/giỏ dùng chỉ mục phẳng.
+1b. *(sửa sau rà soát)* **Chế độ `SAPO_VARIANT_ID`** (`lib/config.ts`, `lib/catalog.ts:74-121`,
+   `buildOrderPayload`) dùng danh mục một mục qua `fetchCatalogEntry`. Phải giữ nguyên chạy được, và có bài
+   kiểm riêng (mục 10 ở danh sách kiểm).
+1c. *(sửa sau rà soát)* **`/api/catalog`** (`app/api/catalog/route.ts`) trả `{variantId, name, priceVnd,
+   imageUrl, href, stock}` — không có nhãn. Ngăn kéo giỏ (`CartMenu`) và `CheckoutForm` đọc từ đây (hoặc từ
+   `getDisplayProducts()` ở trang thanh toán), nên nhãn phải được thêm vào đúng hình dạng này.
 2. **Giá vẫn do server quyết, và đã đúng theo từng variant.** Giỏ hàng chỉ giữ `{variantId, quantity}` và
    `/api/checkout` định giá lại từ Sapo — nên không cần đổi luật, chỉ cần chỉ mục ở điểm 1 chứa đủ variant.
 3. **Combo vẫn bị loại, theo từng variant** (`isSellable`). Một sản phẩm có 4 variant mà 1 cái là combo thì
@@ -71,12 +100,28 @@ Nhãn lựa chọn lấy từ `option1 / option2 / option3` nối bằng ` / `, 
 5. **Nhãn size phải đi theo suốt đường mua.** Ngăn kéo giỏ, trang thanh toán, trang kết quả, phiếu tra cứu đơn
    đều phải ghi *"Trà Bá Tước — 200g ~ 66 Servings"*, không chỉ tên sản phẩm. Bản ghi đơn trong Redis thêm một
    trường **tuỳ chọn** `variantLabel` (bản ghi cũ không có thì đọc như cũ — cùng kỷ luật với mọi thay đổi
-   `PendingOrder` trước đây).
+   `PendingOrder` trước đây). Đã kiểm: `isPendingOrderLine` chỉ xét `sku/productName/unitPriceVnd/quantity`
+   và `normaliseLines` không dựng lại từng dòng, nên trường thêm đi qua nguyên vẹn (`lib/store.ts:213-241`).
+   *(sửa sau rà soát)* **`variantLabel` trong Redis chỉ phục vụ `/success`.** Phiếu tra cứu đơn và phiếu in
+   **không đọc Redis** mà đọc `line_items` của Sapo (`title`/`name`, `lib/sapo.ts:526, 597-602`), và code
+   chưa đọc `variant_title`. Muốn phiếu có nhãn size phải đọc `variant_title` từ Sapo (hoặc xác nhận `name`
+   đã chứa nhãn) — đó là việc riêng trong P3, và phụ thuộc điều ở "Chưa kiểm chứng" bên dưới.
+   Ở mọi nơi hiển thị, **nhãn rỗng khi sản phẩm chỉ có một variant** (Sapo đặt `"Default Title"`): không
+   được in "Default Title" ra cho khách.
 6. **Mã trong URL.** `/products/<alias>?Size=…` chọn size. Đường dẫn dạng `/products/<variantId>` (hiện vẫn
    chạy) sẽ chọn sẵn đúng variant đó thay vì variant đầu.
 7. **Hết hàng theo từng size.** Nút size hết hàng bị làm mờ và không chọn được; sản phẩm chỉ "hết hàng" ở
    danh sách khi **tất cả** size hết.
 8. **Trang danh sách.** Hiện `Từ ₫248,000` khi giá các size khác nhau, hiện giá thường khi chỉ có một giá.
+
+## Chưa kiểm chứng — không được ghi như sự thật *(thêm sau rà soát)*
+
+- **Đơn Sapo có tự hiện nhãn size hay không.** Payload cho dòng có `variant_id` chỉ gửi
+  `{variant_id, quantity, price}` (`lib/sapo.ts:326-331`) và để Sapo điền `title`/`sku`/`variant_title`.
+  Bản đầu viết như thể "đơn tự hiện đúng nhãn" là chắc chắn; thực tế mới chỉ thấy `variant_title:
+  "Default Title"` trên đơn của sản phẩm một variant. Phải kiểm trên đơn thử ở bước kiểm số 9.
+- **Variant thật có `option1/2/3` đúng như mô tả** — chưa có sản phẩm nhiều variant nào trên store để thử
+  (chờ B1).
 
 ## Một rủi ro kinh doanh phải nói trước — gói nhiều hộp
 
@@ -109,12 +154,13 @@ lợi: nó thử đúng thao tác mà shop sẽ làm với sản phẩm thật, 
 
 | Pha | Việc | Ước lượng | Chặn bởi |
 |---|---|---|---|
-| **P1** | **Đọc dữ liệu.** `lib/sapo.ts` đọc mọi variant; `lib/catalog.ts` dựng danh mục *hiển thị* (sản phẩm → nhiều variant) và chỉ mục *tính tiền* (phẳng). **Chưa đổi giao diện.** Bài kiểm: 6 sản phẩm hiện tại cho ra kết quả **y hệt** trước khi sửa | 0,5 ngày | B0 |
+| **P1** | **Đọc dữ liệu.** `lib/sapo.ts` đọc mọi variant (thêm `option1/2/3` vào kiểu); `lib/catalog.ts` dựng danh mục *hiển thị* (sản phẩm → nhiều variant) và chỉ mục *tính tiền* (phẳng, **một hàm dùng chung** cho `startCheckout` và `quoteTotals`; quote báo lỗi thay vì bỏ qua). Chuyển trang chủ, sitemap, `getProductByHandle` sang danh mục hiển thị; giữ chế độ `SAPO_VARIANT_ID`. **Chưa đổi giao diện.** Bài kiểm: 6 sản phẩm hiện tại cho ra kết quả **y hệt** trước khi sửa. **Chạy `reviewer` trước khi commit — bắt buộc** (đụng `lib/order.ts`, `lib/sapo.ts`) | 1 ngày | B0 |
 | **P2** | **Giao diện chọn size.** Hàng nút size dạng link trên trang sản phẩm, giá/tồn/ảnh theo size, `Từ ₫…` ở danh sách, trạng thái hết hàng theo size, đọc `?Size=` | 0,5 ngày | P1, B1 |
-| **P3** | **Nhãn size đi suốt đường mua**: ngăn kéo giỏ, thanh toán, `/success`, tra cứu đơn, phiếu in, `variantLabel` trong bản ghi đơn | 0,5 ngày | P2 |
-| **P4** | **Tài liệu**: `CLAUDE.md` (bỏ giới hạn "một variant"), hướng dẫn chủ shop `docs/huong-dan-them-san-pham.md` thêm mục tạo size, ghi lại những gì đã kiểm | 2 giờ | P3 |
+| **P3** | **Nhãn size đi suốt đường mua**: thêm nhãn vào `/api/catalog`, ngăn kéo giỏ, thanh toán, `/success`, `variantLabel` trong bản ghi đơn; phiếu tra cứu/phiếu in đọc `variant_title` từ Sapo. **Chạy `reviewer`** (đụng `lib/order.ts`, `lib/store.ts`, `lib/sapo.ts`) | 0,75 ngày | P2 |
+| **P4** | **Tài liệu** (giao `doc-writer`): `CLAUDE.md` (bỏ giới hạn "một variant"), hướng dẫn chủ shop `docs/huong-dan-them-san-pham.md` thêm mục tạo size, ghi lại những gì đã kiểm | 2 giờ | P3 |
 
-Tổng: khoảng **1,5–2 ngày**, trong đó phần phụ thuộc bạn là B0 và B1 (khoảng 35 phút).
+Tổng: khoảng **2–2,5 ngày** (bản đầu ghi 1,5–2; tăng vì P1 đụng nhiều nơi hơn dự tính), trong đó phần phụ
+thuộc bạn là B0 và B1 (khoảng 35 phút). Mỗi pha chạy `test-runner` (typecheck, lint, build) trước khi review.
 
 ---
 
@@ -150,7 +196,9 @@ có ảnh riêng, không thì giữ ảnh sản phẩm; danh sách hiện `Từ 
 Tất cả kiểm được bằng `curl` mà không tạo đơn, trừ dòng cuối.
 
 1. **Không hồi quy:** `/api/catalog` của 6 sản phẩm hiện có giống hệt trước khi sửa.
-2. **Mua đúng size:** `/api/quote` với từng `variantId` của sản phẩm thử trả đúng giá của *variant đó*.
+2. **Mua đúng size:** `/api/quote` với từng `variantId` của sản phẩm thử trả đúng giá của *variant đó*, và
+   `/api/checkout` (với giỏ vượt trần COD hoặc dùng bản đọc không tạo đơn) **không** trả 409 cho size thứ
+   hai. Một variant không có trong chỉ mục thì quote phải **báo lỗi**, không trả tổng thấp hơn thực tế.
 3. **Biến thể không tồn tại / của sản phẩm đã ẩn:** `/api/checkout` trả **409**.
 4. **Size hết hàng:** trả 409, và nút tương ứng bị mờ trên trang.
 5. **Hai size cùng sản phẩm trong một giỏ:** thành **hai dòng**, mỗi dòng đúng giá.
@@ -158,8 +206,19 @@ Tất cả kiểm được bằng `curl` mà không tạo đơn, trừ dòng cu�
 7. **`?Size=` sai chữ:** rơi về size mặc định, không 404.
 8. **Combo trong sản phẩm nhiều variant:** chỉ combo bị loại.
 9. **Một đơn COD thật, 1 sản phẩm thử, 1 size** — duy nhất bước tạo đơn thật; kiểm tồn kho **đúng size đó**
-   giảm 1 và các size khác không đổi, rồi xoá đơn. Bước này trừ kho thật (xoá đơn không hoàn kho) và chỉ làm
-   **trên sản phẩm thử của B1**, sau khi bạn đồng ý.
+   giảm 1 và các size khác không đổi, **đơn trong Sapo hiện đúng nhãn size ở dòng hàng** (xác nhận giả định ở
+   mục "Chưa kiểm chứng"), rồi xoá đơn. Bước này trừ kho thật (xoá đơn không hoàn kho) và chỉ làm
+   **trên sản phẩm thử của B1**, sau khi bạn đồng ý, trong session chính (không phải `test-runner`).
+10. *(thêm sau rà soát)* **Chế độ `SAPO_VARIANT_ID`:** đặt biến này rồi kiểm danh mục, trang sản phẩm và báo giá
+    vẫn chạy như trước.
+11. *(thêm sau rà soát)* **Không trùng lặp:** sản phẩm 4 size xuất hiện **một ô** ở trang chủ và **một URL** trong
+    `/sitemap.xml`; `/products/<alias>` mở được, `/products/<variantId của size 2>` chọn sẵn size 2.
+12. *(thêm sau rà soát)* **`?Size=` có ký tự đặc biệt** (`95g+~+32+Servings`, `95g%20~%2032%20Servings`, chuỗi
+    lạ, chuỗi rất dài): khớp được hoặc rơi về size mặc định, không 404, không lỗi 500.
+13. *(thêm sau rà soát)* **Sản phẩm một variant:** không hiện bộ chọn và không in "Default Title" ở bất kỳ đâu
+    (trang sản phẩm, giỏ, thanh toán, `/success`, tra cứu).
+14. *(thêm sau rà soát)* **Variant đầu là combo:** hiện tại cả sản phẩm biến mất; sau khi sửa, chỉ variant combo bị
+    loại, các size còn lại vẫn bán được.
 
 ## Rủi ro
 
@@ -169,3 +228,8 @@ Tất cả kiểm được bằng `curl` mà không tạo đơn, trừ dòng cu�
 3. **Sản phẩm thêm variant ngoài ý muốn** sẽ tự hiện bộ chọn. Đó là chủ ý (bật/tắt bằng dữ liệu), nhưng đáng
    biết khi chỉnh sản phẩm trong Sapo.
 4. **Chưa có variant thật để thử trên store này** — mọi kiểm nghiệm đều phụ thuộc B1.
+5. *(thêm sau rà soát)* **Đổi hình dạng `getDisplayProducts()` làm vỡ lặng lẽ sáu nơi dùng nó** (checkout, quote,
+   `/api/catalog`, trang thanh toán, trang chủ, sitemap). Không có lỗi biên dịch nào báo hết các chỗ; phải rà
+   từng nơi (đã liệt kê ở mục kỹ thuật 1, 1a, 1c) và kiểm bằng danh sách ở trên.
+6. *(thêm sau rà soát)* **Chuyển thay đổi trên đường tiền mà bỏ qua `reviewer`.** Lỗi kiểu "tổng lệch một đồng" hay
+   "quote thấp hơn thực tế" vẫn qua typecheck, lint và build.
