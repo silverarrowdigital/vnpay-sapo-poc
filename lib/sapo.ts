@@ -533,40 +533,68 @@ function phoneDigits(raw: string | null | undefined): string {
  * in one place (`lib/order.ts` `lookupOrder`).
  */
 export async function fetchOrderDetailByRef(cfg: SapoConfig, txnRef: string): Promise<SapoOrderDetail | null> {
-  for (const method of ["vnpay", "cod"] as const) {
-    const tag = txnTag(txnRef, method);
-    const qs = new URLSearchParams({ tag, limit: "50", fields: "id,name,tags,note_attributes" });
-    const data = (await sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`)) as { orders?: OrderDetailRow[] };
-    const row = (data.orders ?? []).find((o) => matchesRef(o, txnRef, tag));
-    if (row === undefined) continue;
-    return {
-      id: row.id,
-      name: row.name ?? `#${row.id}`,
-      createdOn: row.created_on,
-      financialStatus: row.financial_status,
-      fulfillmentStatus: row.fulfillment_status ?? undefined,
-      status: row.status,
-      totalVnd: toVnd(row.total_price),
-      shippingVnd: toVnd(row.total_shipping_price),
-      discountVnd: toVnd(row.total_discounts),
-      phoneDigits: phoneDigits(row.phone ?? row.shipping_address?.phone),
-      lines: (row.line_items ?? []).map((l) => ({
-        title: (l.title ?? l.name ?? "").trim() || "Sản phẩm",
-        sku: (l.sku ?? "").trim() || undefined,
-        quantity: typeof l.quantity === "number" ? l.quantity : 0,
-        priceVnd: toVnd(l.price),
-      })),
-      address: row.shipping_address
-        ? {
-            address1: row.shipping_address.address1 ?? undefined,
-            ward: row.shipping_address.ward ?? undefined,
-            district: row.shipping_address.district ?? undefined,
-            province: row.shipping_address.province ?? undefined,
-          }
-        : undefined,
-    };
+  const methods = ["vnpay", "cod"] as const;
+
+  // **Both tags are queried in parallel, always, and neither short-circuits the other.** Asking in
+  // sequence and stopping at the first hit made the work depend on the answer: a reference that
+  // exists as a VNPAY order cost one Sapo request, a reference that exists at all cost two. That is
+  // a timing oracle on top of the one `lookupOrder` is careful to close — it would let a caller
+  // tell "no such order" from "wrong phone number" by the clock rather than by the message. Doing
+  // both every time makes the cost the same whatever the outcome, and is faster for a COD order.
+  const settled = await Promise.allSettled(
+    methods.map((method) => {
+      const tag = txnTag(txnRef, method);
+      const qs = new URLSearchParams({ tag, limit: "50", fields: "id,name,tags,note_attributes" });
+      return sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`) as Promise<{ orders?: OrderDetailRow[] }>;
+    }),
+  );
+
+  let row: OrderDetailRow | undefined;
+  for (const [i, result] of settled.entries()) {
+    if (result.status !== "fulfilled") continue;
+    const tag = txnTag(txnRef, methods[i]);
+    const hit = (result.value.orders ?? []).find((o) => matchesRef(o, txnRef, tag));
+    if (hit !== undefined) {
+      row = hit;
+      break; // methods order decides, so the answer does not depend on which request returned first
+    }
   }
-  return null;
+
+  if (row === undefined) {
+    // Nothing matched. If a request *failed*, we did not actually look everywhere, and "no such
+    // order" would be a lie told to a customer whose order exists — so raise instead, and let the
+    // route answer "could not look up" rather than "not found".
+    const failure = settled.find((r) => r.status === "rejected");
+    if (failure !== undefined) throw (failure as PromiseRejectedResult).reason;
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name ?? `#${row.id}`,
+    createdOn: row.created_on,
+    financialStatus: row.financial_status,
+    fulfillmentStatus: row.fulfillment_status ?? undefined,
+    status: row.status,
+    totalVnd: toVnd(row.total_price),
+    shippingVnd: toVnd(row.total_shipping_price),
+    discountVnd: toVnd(row.total_discounts),
+    phoneDigits: phoneDigits(row.phone ?? row.shipping_address?.phone),
+    lines: (row.line_items ?? []).map((l) => ({
+      title: (l.title ?? l.name ?? "").trim() || "Sản phẩm",
+      sku: (l.sku ?? "").trim() || undefined,
+      quantity: typeof l.quantity === "number" ? l.quantity : 0,
+      priceVnd: toVnd(l.price),
+    })),
+    address: row.shipping_address
+      ? {
+          address1: row.shipping_address.address1 ?? undefined,
+          ward: row.shipping_address.ward ?? undefined,
+          district: row.shipping_address.district ?? undefined,
+          province: row.shipping_address.province ?? undefined,
+        }
+      : undefined,
+  };
 }
 
 export function sapoAdminOrderUrl(cfg: SapoConfig, orderId: number): string {
