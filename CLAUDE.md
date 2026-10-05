@@ -240,6 +240,28 @@ delivery 25,000:
 - **Stock moves on a COD order too** (115 → 114 on a quantity of 1), because the line carries a
   `variant_id` and the payload sends `inventory_behaviour`. That is right for COD — the goods are
   committed — but it means **a cancelled COD order needs a manual restock**.
+**A combo product's stock is derived, and selling one through this API moves no stock at all.**
+Verified 2026-10-05; full write-up and plan in `docs/plan/T8-combo-ton-kho.md`.
+
+- A combo variant carries `type: "combo"` and `requires_components: true`. Its components are **not**
+  in `/admin/products.json`; they are in **`GET /admin/combos.json`** →
+  `{combos: [{variant_id, product_id, price, total_available, inventories, combo_items}]}`. That
+  endpoint is **not in any Sapo doc page read so far** but returns 200 with data on the live store;
+  `/admin/products/{id}/components.json` and `/admin/variants/{id}/components.json` are 404, and
+  `product_components` / `variant_components` / `combo_products` are not routes either.
+- **`total_available` is `min(component stock / quantity needed)`**, confirmed arithmetically:
+  components at 114 / 37 / 61, each needed once, and `total_available` = 37. `/admin/products.json`
+  reports the same 37 as the variant's `inventory_quantity`, so **the storefront already shows and
+  enforces the right number** — the read path needs no change.
+- **But a combo sold through `POST /admin/orders.json` deducts nothing.** Four orders of ten combos
+  each (40 units, `inventory_behaviour: "decrement_ignoring_policy"`, the combo's `variant_id`) left
+  all three components unchanged; every movement measured was explained by other orders. Combined
+  with the derived availability this means **selling combos never reduces the combo's availability** —
+  sell 37, it still says 37, forever. No error, no warning, no log line: the shop's books drift by
+  one combo per combo sold. Until `docs/plan/T8-combo-ton-kho.md` § T8.3 ships, the safe move is to
+  set the combo product to `draft` in Sapo, which removes it from the storefront immediately
+  (only `status: "active"` is listed) with no deploy.
+
 **Sapo's administrative divisions are the pre-2025 map, and the table is an accretion rather than a
 snapshot.** Verified 2026-10-05, and it decides how addresses work:
 
@@ -585,6 +607,9 @@ run**, so the response codes above are from the docs, not from this terminal.
 - **A rejected COD attempt still spends a rate-limit hit**, because the counter runs before the cart
   is priced. That is the point — probing must not be free — but it means a customer refused for stock
   reasons has fewer tries left.
+- **Combo products are sellable but do not move stock** — see the Sapo section and
+  `docs/plan/T8-combo-ton-kho.md`. The storefront shows the correct availability; the order simply
+  never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - One entry per Sapo product (the first variant by `position`): a product with real options would need a variant picker. Max 10 per line, max 20 lines.
@@ -596,7 +621,8 @@ run**, so the response codes above are from the docs, not from this terminal.
 3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker. (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
 4. ~~Composable product descriptions from a CMS~~ — done (T1, `docs/plan/T1-product-content.md`), and so is the Sanity webhook → `/api/revalidate` (see "Staying on Sanity's free plan").
 5. Blog on Sanity — planned in `docs/plan/T2-blog.md`, reuses the same block array and `BlockRenderer`.
-6. T7 remainders, in the order they bite: a **variant picker**, still the one thing the catalog cannot express; **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
+6. **T8 — combo stock** (`docs/plan/T8-combo-ton-kho.md`). Blocked on one 10-minute check in the Sapo admin that splits "the API path cannot expand a combo" from "Sapo does not track combo components at all".
+7. T7 remainders, in the order they bite: a **variant picker**, still the one thing the catalog cannot express; **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
 7. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
 
 <!-- BEGIN:nextjs-agent-rules -->
