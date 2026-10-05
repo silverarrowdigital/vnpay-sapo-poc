@@ -13,6 +13,64 @@ fee, a Sapo discount code, cash on delivery, and a way for the customer to find 
 
 Not a full store: no database beyond Redis, no auth, no accounts, no extra third-party services.
 
+## How work is done here
+
+Every feature or change follows this flow. Delegate to subagents on your own judgment; do not wait to
+be asked. Subagents cannot see the conversation, so a delegation prompt carries **everything** the
+subagent needs: the goal, the files, the error text, what was already tried, and the hard rules below.
+
+The subagents live in `.claude/agents/` (`test-runner`, `debugger`, `reviewer`, `doc-writer`; `Explore`
+is built in) and the commit command in `.claude/commands/commit.md`. **If one of them is not available in
+the session, say so and do that step in the main session — never report a review or a test run that did
+not happen.**
+
+1. **Understand code** → delegate searching and reading to `Explore`. Do not read many files directly in
+   the main session. This file already maps the repo; use `Explore` for "where is X used" and "how does Y
+   work", and read directly only the few files about to be edited.
+2. **Plan** → for a non-trivial feature, ask the user to switch to plan mode before coding. Save the
+   approved plan to **`docs/plan/T<N>-<feature>.md`** and add its row to `docs/plan/README.md` — the
+   existing numbered-plan convention, not a new `docs/plan-<feature>.md`. A plan says who does what (the
+   shop owner's tasks are separate from the code), lists the decisions it needs with a recommendation for
+   each, and ends on an explicit gate: **no code until the user says to start.**
+3. **Implement** → in the main session, following the plan file.
+4. **Test** → there is **no unit-test framework** in this repo, so "tests" means `npm run typecheck`,
+   `npm run lint`, `npm run build` and the `curl` / script checks listed under "Test". Run them through
+   `test-runner` so long logs stay out of the main context. Write automated tests in the main session only
+   where a framework exists; do not add one as a side effect of another task.
+   - **`test-runner` makes read-only requests only.** Never `POST /api/checkout` with a real variant (a COD
+     checkout creates a real Sapo order and deducts real stock, and even a refused attempt spends
+     rate-limit hits), never `npm run clean:orders -- --yes`, `npm run refund -- … --confirm`,
+     `npm run simulate:ipn`, `npm run replay-ipn`, `git push`. Creating a real order is a deliberate act
+     done in the main session, on a test product, after the user agrees, and deleted afterwards.
+5. **Debug** → fix simple failures yourself. If the same failure persists after **2 attempts**, delegate to
+   `debugger` with the error, what you tried, and the relevant files. Before that, rule out the stale-state
+   traps this repo has already hit: a stale `.next` or `globalThis` cache surviving a reload, a Sapo
+   query parameter that is silently ignored, an in-memory order store lost on a dev-server restart.
+6. **Review** → after implementation and passing tests, always run `reviewer` before committing. Fix
+   critical issues, then re-run the tests.
+   - **The small-change skip below does not apply to anything that moves money or decides whether an order
+     exists:** `lib/order.ts`, `lib/discount.ts`, `lib/shipping.ts`, `lib/sapo.ts`, `lib/vnpay.ts`,
+     `lib/store.ts`, `app/api/checkout/`, `app/api/quote/`, `app/api/vnpay/`. The failures that matter there
+     — a total one đồng off from what VNPAY charged, a discount code that matches by prefix — pass
+     typecheck, lint and build.
+7. **Docs** → if public behaviour, env vars or setup changed, delegate to `doc-writer`. Its conventions:
+   this file is written in English, while `docs/plan/` and the shop-owner guides are written in
+   Vietnamese; anything verified against live Sapo or VNPAY is recorded **with its date and what was
+   measured**; nothing unverified is stated as fact; a new env var goes in `.env.example` and the env
+   table, a new script in `package.json` and the paths table.
+8. **Commit & push** → use `/commit`. Always show the commit message. Commit after review; **never push
+   without being asked, and ask first.** Stage by explicit path — `git add -A` once swept an unrelated
+   edit into a commit. **In this repo `git push origin main` is a production deploy**: Vercel builds `main`
+   and is live within about 40 seconds, so the confirmation to push is the confirmation to deploy.
+9. **Deploy** → never deploy to production without explicit confirmation. Verify a deploy with
+   **read-only requests only** (a `GET` on a route the change touched, e.g. `/api/catalog`). Never poll a
+   deploy with an endpoint that writes: on 2026-10-05 `/api/checkout` used as a readiness probe created
+   four real 4,000,000₫ COD orders during the 40 seconds the old code was still serving. If a build or
+   deploy fails, delegate log analysis to `debugger`.
+
+Skip steps 1–2 and 6 for small, obvious changes (a few lines, one file) — **except step 6 on the money
+path listed above.**
+
 ## Architecture
 
 ```
