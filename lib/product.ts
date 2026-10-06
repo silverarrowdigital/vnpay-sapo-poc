@@ -19,6 +19,14 @@ export const PRODUCT = {
 export const MAX_QUANTITY = 10;
 
 /**
+ * Whether cash on delivery is offered at all. **Off** (2026-10-06, the shop's decision): every order
+ * is paid by VNPAY. The server refuses `paymentMethod: "cod"` in `validateCheckout` — before any rate
+ * limit or Sapo call — and the checkout form does not draw the option, so flipping this to `true` is
+ * the whole of bringing COD back; `placeCodOrder` and its limits are untouched.
+ */
+export const COD_ENABLED = false;
+
+/**
  * Hard ceiling on what cash on delivery may be used for.
  *
  * COD is the one path where a request creates a real Sapo order and moves real stock without any

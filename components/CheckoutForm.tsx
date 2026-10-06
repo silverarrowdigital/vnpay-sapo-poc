@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  COD_ENABLED,
   MAX_COD_TOTAL_VND,
   MAX_QUANTITY,
   formatVnd,
@@ -86,7 +87,7 @@ export default function CheckoutForm({
   // grows past the ceiling while COD is selected, `payWith` falls back to card on the spot — no
   // cascading render, and no window where the button says COD and the request asks for something
   // else. The server enforces the same ceiling; this only saves the customer a refused submit.
-  const codAllowed = quote === undefined || quote.totalVnd <= MAX_COD_TOTAL_VND;
+  const codAllowed = COD_ENABLED && (quote === undefined || quote.totalVnd <= MAX_COD_TOTAL_VND);
   const payWith: PaymentMethod = codAllowed ? method : "vnpay";
   const canPay = rows.length > 0 && !hasUnavailable && addressComplete;
 
@@ -315,7 +316,9 @@ export default function CheckoutForm({
                 hint: `Trả tiền mặt cho người giao hàng. Áp dụng cho đơn đến ${formatVnd(MAX_COD_TOTAL_VND)}.`,
               },
             ] as const
-          ).map((option) => {
+          )
+            .filter((option) => option.id !== "cod" || COD_ENABLED)
+            .map((option) => {
             const disabled = option.id === "cod" && !codAllowed;
             return (
               <label

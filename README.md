@@ -128,6 +128,11 @@ This signs the callback with your own `VNPAY_HASH_SECRET` and creates a real Sap
 
 ### Cash on delivery, and the quickest payload test there is
 
+> **COD is switched off (2026-10-06).** `COD_ENABLED` in `lib/product.ts` is `false`, so the request
+> below answers `400` (`paymentMethod: "Cửa hàng hiện chỉ nhận thanh toán qua VNPAY"`) and creates
+> nothing. It is a source constant, not an env var: to use this recipe, set it to `true`, restart,
+> and set it back afterwards — enabling it in production is a deploy.
+
 A COD checkout needs **no VNPAY configuration and no tunnel**: it creates the Sapo order
 immediately, through the same payload builder a paid order uses. With `npm run dev`:
 

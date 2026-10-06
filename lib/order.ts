@@ -12,6 +12,7 @@ import { errorMessage, log } from "./log";
 import { resolveAddress } from "./locations";
 import {
   MAX_CART_LINES,
+  COD_ENABLED,
   MAX_COD_TOTAL_VND,
   MAX_QUANTITY,
   formatVnd,
@@ -142,6 +143,7 @@ export function validateCheckout(body: unknown): ValidationResult {
 
   const rawMethod = str("paymentMethod") || "vnpay";
   if (rawMethod !== "vnpay" && rawMethod !== "cod") errors.paymentMethod = "Hãy chọn cách thanh toán";
+  else if (rawMethod === "cod" && !COD_ENABLED) errors.paymentMethod = "Cửa hàng hiện chỉ nhận thanh toán qua VNPAY";
   const paymentMethod = rawMethod as PaymentMethod;
 
   // An unreadable code is treated as no code rather than an error: the customer is mid-typing or
@@ -224,6 +226,13 @@ export interface OrderTotals {
 }
 
 export async function startCheckout(input: CheckoutInput, ipAddr: string): Promise<CheckoutStarted> {
+  // Second guard behind validateCheckout: this function is exported, and a caller that builds its
+  // own input must not be able to create a COD order while COD is switched off.
+  if (input.paymentMethod === "cod" && !COD_ENABLED) {
+    throw new CheckoutError("Cửa hàng hiện chỉ nhận thanh toán qua VNPAY.", 409, {
+      paymentMethod: "Cửa hàng hiện chỉ nhận thanh toán qua VNPAY",
+    });
+  }
   const sapo = getSapoConfig(); // fail fast before taking payment if Sapo is not configured
   // Only VNPAY needs a signing secret and a return URL. Demanding them for a COD order would make
   // cash-on-delivery impossible to run on a store that has not finished its VNPAY paperwork.

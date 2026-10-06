@@ -10,6 +10,8 @@ Prove one flow end to end, with the smallest possible system:
 
 Since T7 it is also a shop that can actually take an order: a real Vietnamese address, a delivery
 fee, a Sapo discount code, cash on delivery, and a way for the customer to find their order again.
+**Cash on delivery is switched off since 2026-10-06** (`COD_ENABLED = false` in `lib/product.ts`, the
+shop owner's decision): the shop takes VNPAY only, and the COD code is kept dormant — see security rule 2.
 
 Not a full store: no database beyond Redis, no auth, no accounts, no extra third-party services.
 
@@ -93,7 +95,7 @@ Browser                         Next.js (App Router, Node runtime)              
                                                                financial_status: paid
              ◄── GET /api/vnpay/return ◄─────────────────────────────────────── VNPAY (browser)
                   verify checksum only, redirect →
-                              └── paymentMethod = cod ────────────────────────────┘
+                              └── paymentMethod = cod (CLOSED: COD_ENABLED=false → 400) ┘
              ◄── { successUrl } ──────────────── Sapo POST /admin/orders.json ──► Sapo
                                                   financial_status: pending, no transaction
 /success     reads server-side order state (auto-refreshes until the IPN arrives)
@@ -210,6 +212,11 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
      mark an order paid, so no amount of calling it can fabricate a payment record — only an
      unpaid order a human confirms by phone. What it *can* produce is junk orders, which is what
      the rate limit on `/api/checkout` is for.
+   - **Since 2026-10-06 the COD door is closed by `COD_ENABLED = false`** (client-safe, `lib/product.ts`).
+     `validateCheckout` refuses `paymentMethod: "cod"` with a field error before the rate limiter and
+     before any Sapo call, and `CheckoutForm` does not draw the option. `placeCodOrder`, the `cod` /
+     `codPhone` limits and `MAX_COD_TOTAL_VND` are left in place on purpose; the rules above are
+     unchanged if it is switched back on.
 3. IPN check order (from VNPAY docs): checksum (97) → order exists (01) → amount matches (04) → not already confirmed (02) → apply result.
 4. Success requires `vnp_ResponseCode === "00"` **and** `vnp_TransactionStatus === "00"`.
 5. Signature comparison is constant-time.
@@ -617,14 +624,20 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
   in the wrong case (must be accepted and echo Sapo's own spelling); and **a one-letter code**, which
   must be refused — `?query=T` matches `TEST10` server-side, so accepting it would be the fuzzy-search
   trap reopening. Verified 2026-10-05: `T` → refused, `test10` → `TEST10` −26,800.
-- **COD end to end, locally:** POST the full checkout body with `"paymentMethod":"cod"`. It needs no VNPAY config and no tunnel, and it creates a **real** Sapo order immediately — the fastest way to check a payload change, and the way #1025 was verified. Delete that one order afterwards by its id.
+- **COD is disabled (2026-10-06), so the COD checks below cannot run** unless `COD_ENABLED` is set to
+  `true` in `lib/product.ts` (revert before committing). Verified 2026-10-06 on `next dev`: `POST /api/checkout`
+  with `"paymentMethod":"cod"` → 400 `{"fields":{"paymentMethod":"Cửa hàng hiện chỉ nhận thanh toán qua VNPAY"}}`;
+  the same body with `"vnpay"` and an unknown variant → 409 (nothing created); `/checkout` HTML contains no "COD".
+  **Not verified:** a full VNPAY payment after this change (path unchanged, not re-run). Any "real order" test,
+  e.g. `docs/plan/T9-bien-the-san-pham.md` checklist item 9, must go through VNPAY or re-enable COD temporarily.
+- **COD end to end, locally (only while `COD_ENABLED` is true):** POST the full checkout body with `"paymentMethod":"cod"`. It needs no VNPAY config and no tunnel, and it creates a **real** Sapo order immediately — the fastest way to check a payload change, and the way #1025 was verified. Delete that one order afterwards by its id.
 - **Addresses:** `npm run check:locations` for the shape of Sapo's tables. The three gates worth
   re-testing after any change to `lib/locations.ts`, all of which must answer **400**: a ward that
   belongs to another district; a district that belongs to another province; and **a missing
   `districtId` for a province that still has districts** — that last one is the gate on the two-tier
   path, and losing it would let a forged request skip the containment check entirely.
 - **Order lookup:** `/tra-cuu-don` with the reference and the phone number on the order. A wrong phone must answer exactly like an unknown reference; if it ever differs, the page has become an oracle.
-- **COD limits:** the ceiling and both rate axes are testable with `curl` and without creating an
+- **COD limits (dormant while `COD_ENABLED` is false; the 400 refusal comes first, so these cannot be exercised):** the ceiling and both rate axes are testable with `curl` and without creating an
   order, which is the only reason they are worth testing often. The ceiling: a cart over 3,000,000₫
   with `"paymentMethod":"cod"` must answer **409** while the same cart on `"vnpay"` goes through
   (verified: a 4,000,000₫ cart refused for COD, signed for VNPAY). The phone axis: send the same
@@ -719,6 +732,8 @@ run**, so the response codes above are from the docs, not from this terminal.
 - **The delivery fee is a flat table, not a carrier quote.** `GET /admin/shipping_zones.json` answers `access_denied` even with the order + shipping scope on, so Sapo's own zones are unreachable by a private app. The three zones and the free-shipping threshold in `lib/shipping.ts` are placeholders with a defensible shape; **they are the shop's numbers to set.**
 - **The province list is Sapo's 63-province set**, which predates Vietnam's 2025 mergers. That is deliberate: an order is only useful if Sapo accepts the address on it, so the lists the customer picks from have to be the lists Sapo knows. A customer can therefore pick a unit that no longer exists in law (`Quận 1`, `Phường Đa Kao`), and the order records it; couriers still accept the old names through the transition.
 - **Nothing checks the free-text street line against the three levels chosen.** A customer can select Bà Rịa-Vũng Tàu correctly and type "63 Đinh Tiên Hoàng, Quận 1" into the address field; the order is accepted and the delivery fee charged is Vũng Tàu's. The cross-level combination is impossible (two layers refuse it) but a contradictory *street* is not detectable without an address-validation or geocoding service — which is why a COD order should be confirmed by phone. Same for a wrong-but-consistent address: the fee follows the province chosen, so the shop absorbs the difference if the real destination is in another zone.
+- **COD is switched off (2026-10-06), so the COD bullets in this section (cap, rate limits, double submit) are dormant** — they describe code that
+  is kept, not behaviour customers can reach. Setting `COD_ENABLED` to `true` restores it with nothing else to change.
 - **COD is capped at `MAX_COD_TOTAL_VND` (3,000,000₫ in `lib/product.ts`)** and carries two rate
   limits the card path does not: 3 per IP per 10 minutes, and 5 per phone number per hour. The
   asymmetry is deliberate — card spam costs the spammer before it costs the shop, while a COD request

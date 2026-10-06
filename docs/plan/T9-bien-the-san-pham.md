@@ -26,9 +26,13 @@
 
 ### Việc còn mở — CHƯA kiểm, không được coi là đã đúng
 
-- [ ] **Mục 9 của danh sách kiểm: một đơn COD thật cho size không phải size đầu.** Sản phẩm thử đang có giá 0 và
+- [ ] **Mục 9 của danh sách kiểm: một đơn thật cho size không phải size đầu.** Sản phẩm thử đang có giá 0 và
   tồn kho 0 ở cả 4 variant (đọc 2026-10-06), nên chưa thử được: thanh toán, trừ kho **đúng size**, và đơn Sapo
   có hiện `variant_title` ở dòng hàng không. Việc của bạn (B1): đặt giá và tồn kho thật cho sản phẩm thử.
+  **Lưu ý (2026-10-06): shop đã TẮT thanh toán khi nhận hàng (COD) cho mọi sản phẩm**, nên không đặt được đơn
+  COD để thử như kế hoạch ban đầu. Còn hai cách: (a) đặt đơn qua VNPAY sandbox (đường này tạo đơn Sapo
+  qua IPN, cũng trừ kho thật), hoặc (b) bật COD tạm thời bằng cách đổi `COD_ENABLED` thành `true` trong
+  `lib/product.ts`, thử, rồi đổi lại `false` trước khi commit. Chưa chọn cách nào.
 - [ ] **Tiêu đề dòng hàng của Sapo đã chứa size chưa?** Nếu rồi, phiếu tra cứu đơn sẽ in size hai lần
   ("X (200g)" sau một tiêu đề đã ghi 200g). Chỉ biết được khi có đơn thật ở trên.
 - [ ] **Bộ chọn khi size còn hàng** chưa từng được xem (lúc thử cả 4 size đều hết hàng).
@@ -229,14 +233,16 @@ Tất cả kiểm được bằng `curl` mà không tạo đơn, trừ dòng cu�
 1. **Không hồi quy:** `/api/catalog` của 6 sản phẩm hiện có giống hệt trước khi sửa.
 2. **Mua đúng size:** `/api/quote` với từng `variantId` của sản phẩm thử trả đúng giá của *variant đó*, và
    `/api/checkout` (với giỏ vượt trần COD hoặc dùng bản đọc không tạo đơn) **không** trả 409 cho size thứ
-   hai. Một variant không có trong chỉ mục thì quote phải **báo lỗi**, không trả tổng thấp hơn thực tế.
+   hai. *(Từ 2026-10-06 COD đang tắt: `paymentMethod: "cod"` trả 400 trước khi đọc giỏ, nên cách thử này chỉ
+   còn khi bật lại `COD_ENABLED`; thay bằng `/api/quote` hoặc `paymentMethod: "vnpay"` với variant lạ → 409.)* Một variant không có trong chỉ mục thì quote phải **báo lỗi**, không trả tổng thấp hơn thực tế.
 3. **Biến thể không tồn tại / của sản phẩm đã ẩn:** `/api/checkout` trả **409**.
 4. **Size hết hàng:** trả 409, và nút tương ứng bị mờ trên trang.
 5. **Hai size cùng sản phẩm trong một giỏ:** thành **hai dòng**, mỗi dòng đúng giá.
 6. **Giỏ cũ** (chỉ có variant đầu): vẫn thanh toán bình thường.
 7. **`?Size=` sai chữ:** rơi về size mặc định, không 404.
 8. **Combo trong sản phẩm nhiều variant:** chỉ combo bị loại.
-9. **Một đơn COD thật, 1 sản phẩm thử, 1 size** — duy nhất bước tạo đơn thật; kiểm tồn kho **đúng size đó**
+9. **Một đơn thật, 1 sản phẩm thử, 1 size** *(viết ban đầu là COD; từ 2026-10-06 COD đang tắt nên phải đi
+   qua VNPAY hoặc bật `COD_ENABLED` tạm thời, xem "Việc còn mở")* — duy nhất bước tạo đơn thật; kiểm tồn kho **đúng size đó**
    giảm 1 và các size khác không đổi, **đơn trong Sapo hiện đúng nhãn size ở dòng hàng** (xác nhận giả định ở
    mục "Chưa kiểm chứng"), rồi xoá đơn. Bước này trừ kho thật (xoá đơn không hoàn kho) và chỉ làm
    **trên sản phẩm thử của B1**, sau khi bạn đồng ý, trong session chính (không phải `test-runner`).
