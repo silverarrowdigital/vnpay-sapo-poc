@@ -6,6 +6,7 @@
  * That module also owns the cross-instance claim this file relies on to keep two concurrent IPNs
  * from both creating a Sapo order. Sapo's own lookup in `createOrderOnce` is the second guard.
  */
+import { sendAlert, type AlertDetails, type AlertKind } from "./alert";
 import { getDiscountsEnabled, getSapoConfig, getVnpayConfig } from "./config";
 import { DiscountRejected, quoteDiscount, normaliseCode, type DiscountQuote } from "./discount";
 import { errorMessage, log } from "./log";
@@ -23,6 +24,7 @@ import {
 import { quoteShipping, type ShippingQuote } from "./shipping";
 import { getVariantIndex } from "./catalog";
 import {
+  SapoApiError,
   createOrderOnce,
   fetchOrderDetailByRef,
   type PaymentMethod,
@@ -561,11 +563,27 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
   }
   if (!order) {
     log.warn("ipn.order_not_found", { txnRef });
+    // Only a *successful* payment for an unknown reference is a problem worth an email: it means
+    // money was taken and nothing here can say for what. A failed or cancelled one is noise.
+    if (isPaymentSuccess(params)) {
+      await notifyOwner("paid_no_order", txnRef, {
+        amountVnd: Number(params.vnp_Amount) / 100,
+        vnpTransactionNo: params.vnp_TransactionNo,
+        reason: "no stored order for this reference",
+      });
+    }
     return { RspCode: "01", Message: "Order not found" };
   }
 
   if (Number(params.vnp_Amount) !== order.amountVnd * 100) {
     log.warn("ipn.invalid_amount", { txnRef, received: params.vnp_Amount, expected: order.amountVnd * 100 });
+    if (isPaymentSuccess(params)) {
+      await notifyOwner("amount_mismatch", txnRef, {
+        amountVnd: Number(params.vnp_Amount) / 100,
+        vnpTransactionNo: params.vnp_TransactionNo,
+        reason: `order expects ${order.amountVnd}`,
+      });
+    }
     return { RspCode: "04", Message: "invalid amount" };
   }
 
@@ -608,6 +626,19 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
       // The claim expires by itself, so a failed release only delays the next retry.
       log.warn("ipn.claim_release_failed", { txnRef, error: errorMessage(err) });
     }
+  }
+}
+
+/**
+ * `sendAlert` already never throws; this is the second belt. The IPN's answer to VNPAY must not
+ * depend on a mail provider, and a future edit that removed the try/catch inside `sendAlert` would
+ * otherwise let an exception escape from the unknown-reference branch, which has no handler above it.
+ */
+async function notifyOwner(kind: AlertKind, txnRef: string, details: AlertDetails): Promise<void> {
+  try {
+    await sendAlert(kind, txnRef, details);
+  } catch (err) {
+    log.error("alert.unexpected_throw", { kind, txnRef, error: errorMessage(err) });
   }
 }
 
@@ -672,6 +703,13 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
     } catch (persistErr) {
       log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(persistErr) });
     }
+    // Told once per hour per order, however many times VNPAY retries. The reason is the HTTP status
+    // only: a Sapo response body can carry the customer's details.
+    await notifyOwner("sapo_failed", txnRef, {
+      amountVnd: order.amountVnd,
+      vnpTransactionNo: order.vnpTransactionNo,
+      reason: describeSapoFailure(err, order),
+    });
     // Payment is verified but the Sapo order is not created yet: answer 99 so VNPAY
     // retries the IPN (up to 10 times, every 5 minutes per the docs), which retries Sapo.
     return { RspCode: "99", Message: "Unknown error" };
@@ -838,4 +876,26 @@ export async function lookupOrder(txnRef: string, phone: string, ip: string): Pr
     .catch(() => undefined);
   log.info("lookup.hit", { sapoOrderId: detail.id });
   return { outcome: "found", order: detail, paymentMethod: stored?.paymentMethod ?? "vnpay" };
+}
+
+/**
+ * A fixed label for why creating the Sapo order failed — never the error's own message, which can
+ * carry a response body. Distinguishes "Sapo said no" from "never got to Sapo" from "our own fault"
+ * (e.g. a missing environment variable), because the owner acts differently on each.
+ */
+function describeSapoFailure(err: unknown, order: Pick<PendingOrder, "sapoOrder">): string {
+  // The catch around the create also covers the store write that follows it. If the Sapo order is
+  // already known, the failure was ours, and the mail's own subject ("could not create") is wrong.
+  if (order.sapoOrder !== undefined) {
+    return "the Sapo order WAS created; recording it in our store failed afterwards (see the server log)";
+  }
+  if (err instanceof SapoApiError) {
+    if (err.status !== undefined && err.status >= 200 && err.status < 300) {
+      return `Sapo answered HTTP ${err.status} with an unreadable body - the order may exist`;
+    }
+    return err.status !== undefined
+      ? `Sapo answered HTTP ${err.status}`
+      : "Sapo unreachable, timed out, or replied without an order id - the order may exist";
+  }
+  return "internal error before or around the Sapo call (see the server log)";
 }

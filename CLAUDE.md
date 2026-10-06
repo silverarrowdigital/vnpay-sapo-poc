@@ -13,7 +13,7 @@ fee, a Sapo discount code, cash on delivery, and a way for the customer to find 
 **Cash on delivery is switched off since 2026-10-06** (`COD_ENABLED = false` in `lib/product.ts`, the
 shop owner's decision): the shop takes VNPAY only, and the COD code is kept dormant — see security rule 2.
 
-Not a full store: no database beyond Redis, no auth, no accounts, no extra third-party services.
+Not a full store: no database beyond Redis, no auth, no accounts, no extra third-party services (the one exception is the optional owner alert mail through Resend, see "Order alerts").
 
 ## How work is done here
 
@@ -135,7 +135,8 @@ Browser                         Next.js (App Router, Node runtime)              
 | `lib/shipping.ts` | Delivery fees — **client-safe**, and the only place a fee is computed |
 | `lib/discount.ts` | Sapo `price_rules` → a verified, server-computed discount |
 | `lib/locations.ts` | Vietnam's administrative divisions, read from Sapo and memoised per process |
-| `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
+| `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise. Also the rate-limit counters: `hit` increments, `count(key)` reads without incrementing (used by the alert dedupe) |
+| `lib/alert.ts` | `sendAlert(kind, txnRef, details)` — emails the shop owner through Resend when a customer has paid and no order can be recorded (`paid_no_order`, `amount_mismatch`, `sapo_failed`). Never throws, no customer data in the mail, one mail per reference + kind per hour. Off unless `RESEND_API_KEY` and `ALERT_EMAIL_TO` are set. See "Order alerts" |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
 | `lib/catalog.ts` | Sapo catalog as the app sees it: `getVariantCatalog` (flat, per variant, combo and no-price filter `isSellable`), `getVariantIndex` (the one index checkout and quote both price against), `getStorefrontProducts` (grouped, for home/sitemap), `getProductByHandle` → `ProductGroup`. Server-only. See "Variants (T9)" |
 | `lib/product.ts` | Hardcoded product, plus the client-safe variant helpers (`ProductGroup`, `hasChoice`, `selectVariant`, `productHref`, …) |
@@ -154,8 +155,9 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/refund.mjs` | Refund a VNPAY transaction. **Dry run unless `--confirm`**; reads the genuine references out of the Sapo order and never writes to Sapo |
 | `scripts/querydr.mjs` | Ask VNPAY what really happened to a transaction (API 2.1.0 `querydr`). Read-only; prints the one command that would finish the order |
 | `vitest.config.mts`, `vitest.setup.ts` | Vitest config: runs `lib/**/*.test.ts` in Node (`npm test`), resets mocks between tests; the setup file makes `fetch` throw so no test can reach the network |
-| `lib/vnpay.test.ts`, `lib/shipping.test.ts`, `lib/discount.test.ts`, `lib/sapo.test.ts`, `lib/order.test.ts` | Unit tests for the money path — see "Test". Mocks sit at the module edges (`./catalog`, `./locations`, `./discount` quote, `./sapo`, `./log`); signing is real, and the order store is the real in-memory one wrapped in a JSON round-trip so it behaves like Redis |
+| `lib/vnpay.test.ts`, `lib/shipping.test.ts`, `lib/discount.test.ts`, `lib/sapo.test.ts`, `lib/order.test.ts`, `lib/alert.test.ts` | Unit tests for the money path — see "Test". Mocks sit at the module edges (`./catalog`, `./locations`, `./discount` quote, `./sapo`, `./log`); signing is real, and the order store is the real in-memory one wrapped in a JSON round-trip so it behaves like Redis |
 | `.github/workflows/ci.yml` | CI on every pull request and push to `main`: `npm ci`, typecheck, lint, test, build, Node 24, no secrets |
+| `.agents/`, `.claude/skills/`, `skills-lock.json` | Not ours: third-party agent skills a Marketplace install drops in (with absolute symlinks). Gitignored and ignored by eslint since 2026-10-06; the repo's own agents are in `.claude/agents/`, which that does not cover |
 | `design/TOKENS.md` | Where every design token came from, with its source |
 | `docs/huong-dan-them-san-pham.md` | Shop-owner guide (Vietnamese, no CLI): add a Sapo product, then its Sanity content. Written for someone who is not a developer |
 
@@ -194,6 +196,9 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
 | `ORDER_STORE_NAMESPACE` | no | Overrides the Redis key namespace (see below). Empty string selects production's |
+| `RESEND_API_KEY` | no — alerts are off without it | Resend API key for the owner alert mail (`lib/alert.ts`). It is what Vercel's Resend integration is expected to inject under that name; **unverified**, the integration is not provisioned yet |
+| `ALERT_EMAIL_TO` | no — alerts are off without it | Where the alert goes. Until a sending domain of the shop's own is verified, use the address the Resend account was opened with (Resend's shared sender is believed to deliver only there — **unverified**) |
+| `ALERT_EMAIL_FROM` | no | Sender. Defaults to `Order alerts <onboarding@resend.dev>` |
 | `SANITY_PROJECT_ID` | no | Unset ⇒ the CMS is simply off and the product page shows Sapo's plain-text description |
 | `SANITY_DATASET` | no | Defaults to `production` |
 | `SANITY_API_VERSION` | no | Pinned date, defaults to `2026-10-01`. Never `v1`/`vX` |
@@ -223,7 +228,7 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
      before any Sapo call, and `CheckoutForm` does not draw the option. `placeCodOrder`, the `cod` /
      `codPhone` limits and `MAX_COD_TOTAL_VND` are left in place on purpose; the rules above are
      unchanged if it is switched back on.
-3. IPN check order (from VNPAY docs): checksum (97) → order exists (01) → amount matches (04) → not already confirmed (02) → apply result.
+3. IPN check order (from VNPAY docs): checksum (97) → order exists (01) → amount matches (04) → not already confirmed (02) → apply result. A **successful** payment that ends in `01` (no stored order), `04` (wrong amount) or `99` (Sapo failed) now also emails the owner (`lib/alert.ts`, "Order alerts"); the mail is awaited before the answer but can never change it. A failed or unconfigured send leaves only a log line.
 4. Success requires `vnp_ResponseCode === "00"` **and** `vnp_TransactionStatus === "00"`.
 5. Signature comparison is constant-time.
 6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code. The
@@ -613,6 +618,13 @@ To check the rules still hold: note the request count on the project's Usage pag
 
   Verified on the live Vercel deployment with Redis attached: one checkout then 6 consecutive reads of `/success` all found the order (before Redis, 5 of 5 missed); a wrong amount answered `04`, proving the cross-instance read; three concurrent IPNs for one txnRef answered exactly one `00` and two `99`, and a fourth after completion answered `02`. Run with `vnp_ResponseCode=24` so none of it creates a Sapo order.
 - **Sapo failure after verified payment** → status `sapo_error`, IPN returns `99` so VNPAY retries the IPN, which retries Sapo.
+- **Order alerts (`lib/alert.ts`, added 2026-10-06).** A customer who has paid and has no order is the one failure nobody would otherwise see, so `handleIpn` / `applyIpnResult` call `notifyOwner` for three cases: `paid_no_order` (VNPAY confirms a successful payment for a reference with no stored order — the 24 h record expired, or checkout ran on a preview while the portal IPN points at production; IPN `01`), `amount_mismatch` (IPN `04`) and `sapo_failed` (IPN `99`). The mail goes out through Resend's REST API (`POST https://api.resend.com/emails`, Bearer key, `from`/`to`/`subject`/`text`; request shape checked against Resend's send-email reference on 2026-10-06).
+  - **It can never change the IPN answer.** It is awaited before the answer returns (a serverless function may be frozen the moment the response is sent), but `sendAlert` never throws and `notifyOwner` swallows anything else; a unit test pins that a failing mail leaves the answer unchanged.
+  - **Dedupe is one mail per reference + kind per hour, counted only after a mail was actually sent**, so a failed send does not mute the incident and VNPAY's next retry tries again. The counter is `hit`/`count` in the shared store; `count` reads without incrementing.
+  - **No customer data in the mail**: reference, amount, VNPAY transaction number and a fixed reason label (Sapo HTTP status / unreachable / internal) — never a response body.
+  - **"What to do" differs per kind, on purpose.** Every mail first says to look in Sapo for an order tagged `vnpay-<ref>` and to stop if one exists (a signed callback can be replayed, so an alert can be a false alarm). `replay-ipn` is suggested only for `sapo_failed`. For the other two it is the wrong tool, and so is `npm run refund` (it needs an existing Sapo order): the mail says to create the order by hand or refund through the VNPAY merchant portal. **That refund-through-the-portal step has not been exercised by this repo.**
+  - **Off unless `RESEND_API_KEY` and `ALERT_EMAIL_TO` are both set**; then the only trace is the log line `alert.not_configured`. **Unverified end to end:** no mail has been sent yet, so it is not known that Resend accepts this exact payload, that the integration injects the key under the name `RESEND_API_KEY`, or that the shared sender delivers only to the address the Resend account was opened with. Marketplace integrations (Resend, Neon, Checkly) are not provisioned: each needs a one-time terms acceptance in the Vercel dashboard by the account owner.
+- **Retries of a failed Sapo order cannot be a per-minute cron.** Measured 2026-10-06 with the Vercel CLI: the account is on the **Hobby** plan, and per Vercel's cron docs (vercel.com/docs/cron-jobs/usage-and-pricing, last updated 2026-07-15) Hobby cron jobs run **at most once per day**, with ±59 minutes of precision, and a more frequent expression **fails the deployment**. A scan every minute is therefore not available. The plan is Upstash QStash for the retries (provisioned 2026-10-06: `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY` exist for Production and Preview; **nothing in the code uses them yet**), plus at most a daily cron as a safety net. A cron entry in `vercel.json` more often than daily would break the deploy, so do not add one.
 - **One Redis database is attached to every Vercel environment at once**, so keys carry a namespace (`lib/store.ts` `keyNamespace()`): production keeps the unprefixed keys it has always used — shipping the namespacing could not orphan an order mid-payment — while a preview gets `preview-<branch>` (keyed by `VERCEL_GIT_COMMIT_REF`, so redeploying a branch keeps its orders) and a local server gets `local`. Without this, a preview of a branch that changed `PendingOrder` would write records straight into the set production reads, and production, on older code, would mis-read them for a real customer. `store.redis` logs the namespace so a mix-up is visible without guessing. Sharing a namespace on purpose (`ORDER_STORE_NAMESPACE=`) is what lets a local server finish an order whose IPN VNPAY delivered to the production deployment, since the portal holds only one IPN URL; it is only safe while both sides agree on the record shape.
 - **The cart lives in the browser and carries no prices.** `localStorage` holds only `{variantId, quantity}`; `/api/checkout` resolves each variant against the live Sapo catalog and recomputes every amount, so a tampered cart can change *what* is ordered but never *what it costs*. A line is keyed by `variantId` because that is where Sapo keeps price and stock. Duplicate variants in one request are folded into a single line rather than refused, and the per-line and per-cart ceilings (`MAX_QUANTITY`, `MAX_CART_LINES`) bound how much work a request can ask for.
 - **The cart is cleared on the result page, not at checkout**, so a cancelled payment leaves the basket intact.
@@ -772,6 +784,7 @@ run**, so the response codes above are from the docs, not from this terminal.
 
 - **The in-memory fallback is still in-memory**: with no Redis env vars, `lib/store.ts` uses a Map, so pending orders are lost on restart and never shared between instances. That is fine for `next dev`/`next start` on one machine and wrong on Vercel, where the IPN may land on an instance that never saw the checkout and answer `01`. Configure Redis for any serverless deployment; the result page names which backend is in use when it cannot find an order.
 - If an order is lost from memory, a paid VNPAY transaction cannot be turned into a Sapo order automatically; reconcile manually via VNPAY merchant portal.
+- **The owner is told about a stuck paid order by email, but only once the alert env vars are set, and it is unverified end to end.** `lib/alert.ts` mails on `paid_no_order`, `amount_mismatch` and `sapo_failed`; with `RESEND_API_KEY` / `ALERT_EMAIL_TO` unset it is off and only `alert.not_configured` is logged, which nobody reads. No mail has been sent yet (2026-10-06), and the alert only *tells* a person: nothing retries a failed Sapo order automatically yet (see the Hobby cron limit and QStash plan under "Important implementation decisions").
 - No inventory reservation, no CSRF token on `/api/checkout` (JSON-only POST). Refunds exist as a
   **script a person runs**, not an endpoint or a flow: `npm run refund` talks to VNPAY and leaves the
   Sapo side to a human, and no live refund has been exercised yet. `querydr` exists as a **read-only script**, not an automatic job: it tells a person what VNPAY thinks and prints the command that would finish the order.
@@ -800,7 +813,7 @@ run**, so the response codes above are from the docs, not from this terminal.
   `docs/plan/T8-combo-ton-kho.md`. The storefront shows the correct availability; the order simply
   never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
-- **The unit tests cover `lib/vnpay.ts`, `lib/shipping.ts`, `lib/discount.ts` (`evaluateRule`) and `lib/order.ts` (checkout totals, quote, IPN) only.** Nothing tests `lib/sapo.ts` (the payload and the lookups), `lib/store.ts` against Redis, the route handlers, the UI or the scripts, so those rely on the live checks under "Test".
+- **The unit tests cover `lib/vnpay.ts`, `lib/shipping.ts`, `lib/discount.ts` (`evaluateRule`), `lib/order.ts` (checkout totals, quote, IPN) and `lib/alert.ts` (dedupe, no-throw, mail content, with `fetch` mocked) only.** Nothing tests `lib/sapo.ts` (the payload and the lookups), `lib/store.ts` against Redis, the route handlers, the UI or the scripts, so those rely on the live checks under "Test".
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - Sizes (T9) are one option at most in the URL, and each size is its own variant with its own stock — see "Variants (T9)" for what that does and does not cover. Max 10 per line, max 20 lines.
 

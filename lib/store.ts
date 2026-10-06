@@ -168,6 +168,13 @@ export interface OrderStore {
    * serverless. On the Map it is per-process — the same caveat as everything else in that backend.
    */
   hit(key: string, windowSeconds: number): Promise<number>;
+  /**
+   * The running total for `key` **without counting a hit** (0 when there is none or its window has
+   * ended). It exists for "has this already been done?" checks that must only be recorded after the
+   * thing succeeded — see lib/alert.ts, where counting before sending would let one failed email
+   * silence an incident for an hour.
+   */
+  count(key: string): Promise<number>;
 }
 
 /**
@@ -311,6 +318,11 @@ class MemoryOrderStore implements OrderStore {
     current.count += 1;
     return current.count;
   }
+
+  async count(key: string): Promise<number> {
+    const current = memoryState.hits.get(key);
+    return current !== undefined && current.expiresAt > Date.now() ? current.count : 0;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +379,11 @@ class RedisOrderStore implements OrderStore {
     // first hit. Setting it on every hit would turn a steady stream into a window that never ends.
     if (count === 1) await this.redis.expire(k, windowSeconds);
     return count;
+  }
+
+  async count(key: string): Promise<number> {
+    const n = await this.redis.get<number>(RATE_KEY + this.namespace + key);
+    return typeof n === "number" ? n : Number(n ?? 0) || 0;
   }
 }
 

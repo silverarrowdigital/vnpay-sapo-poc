@@ -17,6 +17,7 @@ vi.mock("./log", () => ({
   errorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
 }));
 vi.mock("./catalog", () => ({ getVariantIndex: vi.fn() }));
+vi.mock("./alert", () => ({ sendAlert: vi.fn(async () => true) }));
 vi.mock("./locations", () => ({ resolveAddress: vi.fn() }));
 vi.mock("./discount", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discount")>()),
@@ -42,6 +43,7 @@ vi.mock("./store", async (importOriginal) => {
         claim: (txnRef) => s.claim(txnRef),
         release: (txnRef) => s.release(txnRef),
         hit: (key, windowSeconds) => s.hit(key, windowSeconds),
+        count: (key) => s.count(key),
       };
     },
   };
@@ -50,7 +52,8 @@ vi.mock("./store", async (importOriginal) => {
 const { getVariantIndex } = await import("./catalog");
 const { resolveAddress } = await import("./locations");
 const { quoteDiscount } = await import("./discount");
-const { createOrderOnce } = await import("./sapo");
+const { SapoApiError, createOrderOnce } = await import("./sapo");
+const { sendAlert } = await import("./alert");
 const { CheckoutError, _resetStore, getOrder, handleIpn, quoteTotals, startCheckout, validateCheckout } = await import(
   "./order"
 );
@@ -260,20 +263,71 @@ describe("handleIpn — the only place a paid order is created", () => {
     expect(createOrderOnce).not.toHaveBeenCalled();
   });
 
-  it("answers 01 to a reference it never issued", async () => {
+  it("answers 01 to a reference it never issued, and tells the owner a payment is unaccounted for", async () => {
     expect((await handleIpn(ipn("20200101000000000000", 378_000))).RspCode).toBe("01");
     expect(createOrderOnce).not.toHaveBeenCalled();
+    expect(sendAlert).toHaveBeenCalledWith(
+      "paid_no_order",
+      "20200101000000000000",
+      expect.objectContaining({ amountVnd: 378_000, vnpTransactionNo: "15696152" }),
+    );
   });
 
-  it("answers 04 when the amount is off by one đồng", async () => {
+  it("tells the owner the reason is internal, not Sapo, when the failure was not a Sapo error", async () => {
+    const { txnRef, amountVnd } = await pendingOrder();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new Error("Environment not configured (missing: SAPO_API_KEY)"));
+    await handleIpn(ipn(txnRef, amountVnd));
+    const reason = vi.mocked(sendAlert).mock.calls[0][2]?.reason ?? "";
+    expect(reason).toMatch(/internal/);
+    expect(reason).not.toMatch(/SAPO_API_KEY|Sapo answered/);
+  });
+
+  it("answers VNPAY exactly as before even if the alert itself blows up", async () => {
+    vi.mocked(sendAlert).mockRejectedValue(new Error("mail provider exploded"));
+    // unknown reference, successful payment -> 01
+    expect((await handleIpn(ipn("20200101000000000002", 378_000))).RspCode).toBe("01");
+    // amount mismatch on a real order -> 04
+    const { txnRef, amountVnd } = await pendingOrder();
+    expect((await handleIpn(ipn(txnRef, amountVnd + 1))).RspCode).toBe("04");
+    // Sapo failure -> 99
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("99");
+    // and the alert was really attempted at all three places, not skipped
+    expect(sendAlert).toHaveBeenCalledTimes(3);
+  });
+
+  it("says plainly when the Sapo order exists and only our own record failed", async () => {
+    const { txnRef, amountVnd } = await pendingOrder();
+    // createOrderOnce succeeds, but the store write that records it fails
+    const real = (await vi.importActual<typeof import("./store")>("./store")).getOrderStore();
+    const put = real.put.bind(real);
+    let writes = 0;
+    const spy = vi.spyOn(real, "put").mockImplementation(async (o) => {
+      writes += 1;
+      if (writes === 2) throw new Error("redis down"); // 1 = processing, 2 = completed
+      return put(o);
+    });
+    await handleIpn(ipn(txnRef, amountVnd));
+    spy.mockRestore();
+    expect(vi.mocked(sendAlert).mock.calls[0][2]?.reason).toMatch(/WAS created/);
+  });
+
+  it("does not alert for an unknown reference whose payment failed or was cancelled", async () => {
+    await handleIpn(ipn("20200101000000000001", 378_000, { vnp_ResponseCode: "24", vnp_TransactionStatus: "02" }));
+    expect(sendAlert).not.toHaveBeenCalled();
+  });
+
+  it("answers 04 when the amount is off by one đồng, and alerts because money was taken", async () => {
     const { txnRef, amountVnd } = await pendingOrder();
     expect((await handleIpn(ipn(txnRef, amountVnd + 1))).RspCode).toBe("04");
     expect(createOrderOnce).not.toHaveBeenCalled();
+    expect(sendAlert).toHaveBeenCalledWith("amount_mismatch", txnRef, expect.objectContaining({ amountVnd: amountVnd + 1 }));
   });
 
   it("creates the Sapo order once for a paid IPN, and answers 02 to the repeat", async () => {
     const { txnRef, amountVnd } = await pendingOrder();
     expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    expect(sendAlert).not.toHaveBeenCalled(); // a normal paid order is not an incident
     expect(createOrderOnce).toHaveBeenCalledTimes(1);
     expect(vi.mocked(createOrderOnce).mock.calls[0][1]).toMatchObject({ txnRef, totalVnd: 378_000, method: "vnpay" });
     expect((await getOrder(txnRef))?.status).toBe("completed");
@@ -291,9 +345,15 @@ describe("handleIpn — the only place a paid order is created", () => {
 
   it("answers 99 when Sapo fails after payment, and succeeds on VNPAY's retry", async () => {
     const { txnRef, amountVnd } = await pendingOrder();
-    vi.mocked(createOrderOnce).mockRejectedValueOnce(new Error("Sapo POST failed with HTTP 503"));
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("Sapo POST failed with HTTP 503", 503, "customer@example.com"));
     expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("99");
     expect((await getOrder(txnRef))?.status).toBe("sapo_error");
+    // The owner is told the HTTP status only — never the response body, which can hold customer data.
+    expect(sendAlert).toHaveBeenCalledWith(
+      "sapo_failed",
+      txnRef,
+      expect.objectContaining({ amountVnd, reason: "Sapo answered HTTP 503" }),
+    );
 
     expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
     expect((await getOrder(txnRef))?.status).toBe("completed");
