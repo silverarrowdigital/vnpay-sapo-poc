@@ -416,7 +416,7 @@ Sapo's Order API overview notes payment info/transactions may not be stored for 
 
 A product with more than one Sapo variant shows a size picker; a product with one behaves as before. No
 flag and no Sanity field: the data decides. Plan: `docs/plan/T9-bien-the-san-pham.md`. **Status:
-implemented, real-order test still owed — see the open items.**
+implemented; the real-order test is done for the VNPAY path (2026-10-06) — a few cases are still open, see below.**
 
 - **`fetchCatalogEntries` returns every variant of every active product**, flat, by `position` (it used to
   take the first only). Each entry carries `variantLabel` — `option1/2/3` joined with ` / `, Sapo's
@@ -455,16 +455,42 @@ priced a known variant correctly, two sizes as two lines, and answered 409 "Mộ
 không còn bán." for unknown variant 999. `typecheck`, `lint`, `build` pass; `reviewer` found nothing
 critical.
 
+**Real order of a non-first size, measured 2026-10-06** (real VNPAY sandbox payment, NCB test card, on a
+local `next dev` with `npm run watch:ipn` replaying the callback — `APP_BASE_URL` was localhost and there
+was no Redis, so the in-memory store). The shop had set prices, SKUs and stock on the test product first:
+230361050 `TEST-0070` 248,000 (stock 69); 230451738 `TEST-0071` 348,000 (68); 230451739 `TEST-0072`
+458,000 (67); 230451740 `TEST-0073` 848,000 (66). One unit of the **second** size (230451738):
+
+- `/api/checkout` signed `vnp_Amount` 37,800,000 = 348,000 + 30,000 delivery = 378,000₫. Callback
+  `vnp_ResponseCode` 00, IPN answered `00`, Sapo order **#1035**: `financial_status: paid`, `total_price`
+  378,000, `total_shipping_price` 30,000, `gateway: VNPAY`, stored transaction sale/success 378,000, tags
+  `headless-poc, vnpay, vnpay-<txnRef>`.
+- **The line as Sapo stored it:** `title` "TEST Size Picker" — **without the size** — `name` "TEST Size Picker -
+  200g ~ 66 Servings", `variant_id` 230451738, `variant_title` "200g ~ 66 Servings", `sku` TEST-0071, price
+  348,000. So Sapo fills `variant_title` itself from the `variant_id`, and since the title lacks the size the
+  order-lookup slip prints "TEST Size Picker (200g ~ 66 Servings)" with no duplication.
+- **Stock fell on the right variant:** 230451738 went 68 → 67; the other three stayed 69, 67, 66.
+- `/success` showed "TEST Size Picker (200g ~ 66 Servings) × 1 — ₫348,000". `POST /api/order-lookup` with
+  the right phone returned the line with `variantTitle` "200g ~ 66 Servings"; a wrong phone and an unknown
+  reference both answered 404 with the identical message. No "Default Title" on `/`,
+  `/products/test-product-1` or `/products/test-size-picker`.
+- The picker rendered with sizes in stock for the first time: the selected size carried `aria-current`, and
+  the home tile read "Từ ₫248,000".
+- Cleanup: order #1035 was deleted by id (DELETE 200, none left tagged). Deleting does **not** restock:
+  230451738 stayed at 67 and the shop has to put its on-hand back to 68 by hand.
+
+**Found on the way, not fixed:** before the shop set prices, two variants sat at price 0 and were treated
+as sellable. The code does not refuse a price ≤ 0, so a size priced 0 would be offered for 0 and VNPAY would
+reject an amount of 0. Suggested follow-up (refuse or hide such a variant), not done.
+
 **Open items — NOT verified, do not treat as fact:**
 
-- **No real order of a non-first size has been placed.** The test product has price 0 and stock 0 on all
-  four variants (as of 2026-10-06), so checkout, stock deduction on the *right* size, and whether the
-  Sapo order line shows `variant_title` are untested (plan checklist item 9).
-- **Unknown whether Sapo's line `title` already includes the size.** If it does, the order-lookup slip
-  prints it twice ("X (200g)" after a title that already says 200g).
-- **The picker has never been rendered with a size in stock** (every size was sold out when tested).
-- **A variant with no SKU falls back to `PRODUCT.sku` (`TEST-001`)** — the first variant of the test
-  product has none. Pre-existing fallback; give every size its own SKU in Sapo.
+- **Two sizes of one product in a single cart, end to end.** Quote prices them as two lines (above), but no
+  real order has carried two lines.
+- **A sold-out size on a page where other sizes are in stock.** Earlier, all four were sold out; today all
+  four were in stock, so the mixed case has not been rendered.
+- **A variant with no SKU** falls back to `PRODUCT.sku` (`TEST-001`). Pre-existing fallback; all four test
+  variants have SKUs now, so it was not exercised on 2026-10-06. Give every size its own SKU in Sapo.
 - **Multi-pack sizes (`5 x 95g`) keep independent stock** from the single pack, so the two counters drift
   unless the shop balances them by hand. Same family as T8, milder; not solved here.
 - Reviewer nits left unfixed: the checkout page serialises each variant's copy of the description to the
@@ -628,8 +654,9 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
   `true` in `lib/product.ts` (revert before committing). Verified 2026-10-06 on `next dev`: `POST /api/checkout`
   with `"paymentMethod":"cod"` → 400 `{"fields":{"paymentMethod":"Cửa hàng hiện chỉ nhận thanh toán qua VNPAY"}}`;
   the same body with `"vnpay"` and an unknown variant → 409 (nothing created); `/checkout` HTML contains no "COD".
-  **Not verified:** a full VNPAY payment after this change (path unchanged, not re-run). Any "real order" test,
-  e.g. `docs/plan/T9-bien-the-san-pham.md` checklist item 9, must go through VNPAY or re-enable COD temporarily.
+  A full VNPAY payment after this change **has since been run** (2026-10-06, T9 checklist item 9, order #1035:
+  paid, IPN `00`, stock deducted — see "Variants (T9)"). Any further "real order" test must go through VNPAY or
+  re-enable COD temporarily.
 - **COD end to end, locally (only while `COD_ENABLED` is true):** POST the full checkout body with `"paymentMethod":"cod"`. It needs no VNPAY config and no tunnel, and it creates a **real** Sapo order immediately — the fastest way to check a payload change, and the way #1025 was verified. Delete that one order afterwards by its id.
 - **Addresses:** `npm run check:locations` for the shape of Sapo's tables. The three gates worth
   re-testing after any change to `lib/locations.ts`, all of which must answer **400**: a ward that
@@ -758,11 +785,11 @@ run**, so the response codes above are from the docs, not from this terminal.
 
 1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
 2. ~~VNPAY `querydr` reconciliation~~ — done as a read-only script (`npm run querydr`). Remaining: an automatic job, which needs an index of pending references (the store has no key scan) and a decision about who may trigger a write.
-3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). The variant picker is in too (T9, implemented, real-order test pending). (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
+3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). The variant picker is in too (T9, implemented; real order of a non-first size verified via VNPAY 2026-10-06). (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
 4. ~~Composable product descriptions from a CMS~~ — done (T1, `docs/plan/T1-product-content.md`), and so is the Sanity webhook → `/api/revalidate` (see "Staying on Sanity's free plan").
 5. Blog on Sanity — planned in `docs/plan/T2-blog.md`, reuses the same block array and `BlockRenderer`.
 6. **T8 — combo stock** (`docs/plan/T8-combo-ton-kho.md`). Blocked on one 10-minute check in the Sapo admin that splits "the API path cannot expand a combo" from "Sapo does not track combo components at all".
-7. T7 remainders, in the order they bite: ~~a variant picker~~ (done, T9 — still owes one real order of a non-first size); **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
+7. T7 remainders, in the order they bite: ~~a variant picker~~ (done, T9 — real order of a non-first size verified 2026-10-06); **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
 7. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
 
 <!-- BEGIN:nextjs-agent-rules -->

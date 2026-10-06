@@ -1,8 +1,8 @@
 # T9 — Chọn biến thể (Size) cho sản phẩm
 
-**Trạng thái (2026-10-06): ĐÃ LÀM XONG CODE — CHỜ KIỂM BẰNG MỘT ĐƠN THẬT.** P1–P4 đã xong trong working tree
-(chưa commit). Còn một việc chặn việc coi là "xong hẳn": đặt một đơn thật cho size **không phải size đầu**
-(mục "Việc còn mở" ngay dưới).
+**Trạng thái (2026-10-06): ĐÃ LÀM XONG CODE, ĐÃ KIỂM BẰNG MỘT ĐƠN THẬT QUA VNPAY.** P1–P4 đã xong trong working
+tree (chưa commit). Đơn thật cho size **không phải size đầu** đã chạy được (mục "Kết quả đơn thật" ngay dưới);
+còn vài trường hợp chưa kiểm (mục "Việc còn mở").
 
 **Đã chốt 2026-10-05:** chủ shop chọn **theo khuyến nghị cho cả 4 câu** ở mục "Cần bạn chốt".
 
@@ -24,20 +24,41 @@
   size thành hai dòng, variant `999` không có thì trả **409**. `typecheck`, `lint`, `build` đạt; `reviewer`
   không thấy lỗi nghiêm trọng.
 
+### Kết quả đơn thật (mục 9) — đo ngày 2026-10-06
+
+Làm **qua VNPAY sandbox, không phải COD** (COD đang tắt). Thẻ thử NCB, chạy trên `next dev` ở máy, dùng
+`npm run watch:ipn` phát lại callback (`APP_BASE_URL` là localhost, không có Redis nên dùng bộ nhớ trong).
+Shop đã đặt giá, SKU, tồn kho cho sản phẩm thử trước: `95g` TEST-0070 248.000 (kho 69); `200g` TEST-0071
+348.000 (68); `5 x 95g` TEST-0072 458.000 (67); `10 x 95g` TEST-0073 848.000 (66). Mua **1 cái size thứ hai**
+(`200g ~ 66 Servings`, variant 230451738):
+
+- Số tiền ký gửi VNPAY: 37.800.000 = 348.000 + 30.000 phí giao = **378.000₫**. Callback `00`, IPN trả `00`,
+  Sapo tạo đơn **#1035**: đã thanh toán, `total_price` 378.000, phí giao 30.000, cổng VNPAY, giao dịch
+  sale/success 378.000, đủ thẻ tag.
+- **Dòng hàng Sapo lưu:** `title` "TEST Size Picker" (**không** có size), `name` "TEST Size Picker - 200g ~
+  66 Servings", `variant_title` "200g ~ 66 Servings", `sku` TEST-0071, giá 348.000. => Sapo **tự điền
+  `variant_title`** từ `variant_id`; vì tiêu đề không chứa size nên phiếu tra cứu in "TEST Size Picker (200g ~
+  66 Servings)", **không bị in size hai lần**.
+- **Kho trừ đúng size:** 68 → 67 ở size này; ba size kia giữ nguyên (69, 67, 66).
+- `/success` hiện đúng "… (200g ~ 66 Servings) × 1 — ₫348,000". Tra cứu đơn với đúng số điện thoại trả dòng có
+  nhãn size; sai số điện thoại và mã không tồn tại cùng trả 404, cùng một câu. Không có "Default Title" ở
+  trang chủ hay hai trang sản phẩm.
+- Lần đầu thấy bộ chọn khi các size còn hàng: size đang chọn có `aria-current`, ô trang chủ hiện "Từ ₫248,000".
+- Dọn: đã xoá đơn #1035 theo id. **Xoá đơn không hoàn kho**: size 200g vẫn ở 67, **việc của bạn: đặt lại tồn
+  kho thực của size này về 68 trong Sapo.**
+
+**Phát hiện thêm, chưa sửa:** trước khi shop đặt giá, hai variant giá 0 vẫn được coi là bán được. Code hiện
+**không từ chối giá ≤ 0**, nên một size giá 0 sẽ bán với giá 0 và VNPAY sẽ từ chối số tiền 0. Đề xuất làm sau
+(ẩn hoặc từ chối variant giá ≤ 0), **chưa làm**.
+
 ### Việc còn mở — CHƯA kiểm, không được coi là đã đúng
 
-- [ ] **Mục 9 của danh sách kiểm: một đơn thật cho size không phải size đầu.** Sản phẩm thử đang có giá 0 và
-  tồn kho 0 ở cả 4 variant (đọc 2026-10-06), nên chưa thử được: thanh toán, trừ kho **đúng size**, và đơn Sapo
-  có hiện `variant_title` ở dòng hàng không. Việc của bạn (B1): đặt giá và tồn kho thật cho sản phẩm thử.
-  **Lưu ý (2026-10-06): shop đã TẮT thanh toán khi nhận hàng (COD) cho mọi sản phẩm**, nên không đặt được đơn
-  COD để thử như kế hoạch ban đầu. Còn hai cách: (a) đặt đơn qua VNPAY sandbox (đường này tạo đơn Sapo
-  qua IPN, cũng trừ kho thật), hoặc (b) bật COD tạm thời bằng cách đổi `COD_ENABLED` thành `true` trong
-  `lib/product.ts`, thử, rồi đổi lại `false` trước khi commit. Chưa chọn cách nào.
-- [ ] **Tiêu đề dòng hàng của Sapo đã chứa size chưa?** Nếu rồi, phiếu tra cứu đơn sẽ in size hai lần
-  ("X (200g)" sau một tiêu đề đã ghi 200g). Chỉ biết được khi có đơn thật ở trên.
-- [ ] **Bộ chọn khi size còn hàng** chưa từng được xem (lúc thử cả 4 size đều hết hàng).
-- [ ] **SKU:** variant đầu của sản phẩm thử không có SKU trong Sapo nên code rơi về SKU mặc định `TEST-001`
-  (cơ chế có từ trước). Sản phẩm thật nên cho mỗi size một SKU riêng.
+- [ ] **Hai size của cùng sản phẩm trong MỘT giỏ, đặt đơn thật** (hai dòng). Báo giá đã đúng hai dòng, nhưng
+  chưa có đơn thật nào mang hai dòng.
+- [ ] **Một size hết hàng trên trang mà các size khác còn hàng.** Lần trước cả 4 hết, lần này cả 4 còn; trường
+  hợp lẫn chưa được xem.
+- [ ] **Variant không có SKU** (code rơi về `TEST-001`, cơ chế có từ trước). Hôm nay cả 4 variant đều có SKU
+  nên chưa chạy nhánh này. Sản phẩm thật nên cho mỗi size một SKU riêng.
 - Tồn tại, chưa sửa (ghi nhận từ `reviewer`, không nghiêm trọng): trang thanh toán gửi N bản mô tả cho N size;
   ô ở trang chủ ẩn giá so sánh khi các size khác giá; nhãn "A+B" và "A B" khớp nhau khi đọc `?Size=`.
 
@@ -151,6 +172,10 @@ Nhãn lựa chọn lấy từ `option1 / option2 / option3` nối bằng ` / `, 
 
 ## Chưa kiểm chứng — không được ghi như sự thật *(thêm sau rà soát)*
 
+> **Cập nhật 2026-10-06:** hai điều dưới đây đã được kiểm bằng đơn thật #1035 — Sapo tự điền `variant_title`
+> từ `variant_id`, và variant thật có nhãn đúng. Xem "Kết quả đơn thật". Giữ nguyên bên dưới để biết đã
+> nghi ngờ điều gì.
+
 - **Đơn Sapo có tự hiện nhãn size hay không.** Payload cho dòng có `variant_id` chỉ gửi
   `{variant_id, quantity, price}` (`lib/sapo.ts:326-331`) và để Sapo điền `title`/`sku`/`variant_title`.
   Bản đầu viết như thể "đơn tự hiện đúng nhãn" là chắc chắn; thực tế mới chỉ thấy `variant_title:
@@ -241,8 +266,8 @@ Tất cả kiểm được bằng `curl` mà không tạo đơn, trừ dòng cu�
 6. **Giỏ cũ** (chỉ có variant đầu): vẫn thanh toán bình thường.
 7. **`?Size=` sai chữ:** rơi về size mặc định, không 404.
 8. **Combo trong sản phẩm nhiều variant:** chỉ combo bị loại.
-9. **Một đơn thật, 1 sản phẩm thử, 1 size** *(viết ban đầu là COD; từ 2026-10-06 COD đang tắt nên phải đi
-   qua VNPAY hoặc bật `COD_ENABLED` tạm thời, xem "Việc còn mở")* — duy nhất bước tạo đơn thật; kiểm tồn kho **đúng size đó**
+9. [x] **Một đơn thật, 1 sản phẩm thử, 1 size** *(viết ban đầu là COD; COD đã tắt từ 2026-10-06 nên **đã làm qua
+   VNPAY** cùng ngày, đơn #1035, kết quả ở mục "Kết quả đơn thật")* — duy nhất bước tạo đơn thật; kiểm tồn kho **đúng size đó**
    giảm 1 và các size khác không đổi, **đơn trong Sapo hiện đúng nhãn size ở dòng hàng** (xác nhận giả định ở
    mục "Chưa kiểm chứng"), rồi xoá đơn. Bước này trừ kho thật (xoá đơn không hoàn kho) và chỉ làm
    **trên sản phẩm thử của B1**, sau khi bạn đồng ý, trong session chính (không phải `test-runner`).
