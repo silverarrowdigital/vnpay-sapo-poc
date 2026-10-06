@@ -47,9 +47,14 @@ Shop đã đặt giá, SKU, tồn kho cho sản phẩm thử trước: `95g` TES
 - Dọn: đã xoá đơn #1035 theo id. **Xoá đơn không hoàn kho**: size 200g vẫn ở 67, **việc của bạn: đặt lại tồn
   kho thực của size này về 68 trong Sapo.**
 
-**Phát hiện thêm, chưa sửa:** trước khi shop đặt giá, hai variant giá 0 vẫn được coi là bán được. Code hiện
-**không từ chối giá ≤ 0**, nên một size giá 0 sẽ bán với giá 0 và VNPAY sẽ từ chối số tiền 0. Đề xuất làm sau
-(ẩn hoặc từ chối variant giá ≤ 0), **chưa làm**.
+**Phát hiện thêm, đã sửa 2026-10-06 (rà soát trước khi push):** trước khi shop đặt giá, hai variant giá 0 vẫn
+được coi là bán được. Code cũ không từ chối giá ≤ 0. Ghi chú trước đây ở đây nói "VNPAY sẽ từ chối số tiền 0"
+là **sai**: số tiền ký là tiền hàng + phí ship, nên size giá 0 sẽ được thanh toán chỉ bằng phí ship (VNPAY
+chấp nhận), và nếu nằm cạnh giỏ vượt mức miễn phí ship (`FREE_SHIPPING_THRESHOLD_VND`, `lib/shipping.ts`) thì
+được tặng kèm miễn phí, tối đa 10 cái. **Nay `isSellable` (`lib/catalog.ts`) ẩn variant giá không > 0**, cùng
+chỗ với bộ lọc combo, ghi log `catalog.unpriced_withheld`. **Chưa thử trên dữ liệu Sapo thật** (hiện không có
+variant nào giá 0 và không ghi gì vào cửa hàng): chỉ mới `typecheck`, `lint` đạt và `/api/catalog` vẫn trả
+đúng 9 variant có giá (2026-10-06).
 
 ### Việc còn mở — CHƯA kiểm, không được coi là đã đúng
 

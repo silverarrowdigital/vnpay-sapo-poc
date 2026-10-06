@@ -166,8 +166,9 @@ chỉ là phần mô tả trống. Nên lần nào cũng phải mở trang ra xe
 
 Ví dụ: cùng một loại trà bán `95g`, `200g`, `5 x 95g`. Trên website, khách thấy một hàng nút để chọn cỡ.
 
-> **Tình trạng:** tính năng đã làm xong nhưng **chưa thử bằng một đơn hàng thật** cho cỡ không phải cỡ đầu
-> (tính đến 2026-10-06). Trước khi bán cỡ thật, hãy nhờ người kỹ thuật đặt thử một đơn.
+> **Tình trạng:** tính năng đã làm xong và **đã thử bằng một đơn thật** cho cỡ không phải cỡ đầu: ngày
+> 2026-10-06, thanh toán thật qua VNPAY sandbox, đơn #1035, cỡ 200g, 378.000₫; tồn kho chỉ giảm ở đúng cỡ đó
+> (đơn thử đã được xoá). Chưa thử giỏ có hai cỡ trong cùng một đơn.
 
 **Cách làm — tất cả ở Sapo, không đụng Sanity:**
 
@@ -175,7 +176,8 @@ Ví dụ: cùng một loại trà bán `95g`, `200g`, `5 x 95g`. Trên website, 
    tên có dấu hoặc có dấu cách vẫn chạy nhưng địa chỉ trang sẽ dùng mã số thay vì chữ `?Size=`).
 2. Mỗi cỡ là một **phiên bản (variant)**, gõ đúng tên cỡ như muốn khách thấy (ví dụ `200g ~ 66 Servings`).
 3. **Mỗi phiên bản phải có giá riêng, SKU riêng và tồn kho riêng.** Thiếu SKU thì hệ thống dùng tạm một mã
-   mặc định, đơn hàng sẽ khó đối chiếu.
+   mặc định, đơn hàng sẽ khó đối chiếu. **Cỡ có giá bằng 0 hoặc chưa có giá sẽ KHÔNG hiện và KHÔNG bán được**
+   (bị ẩn cho tới khi bạn đặt giá), nên cỡ mới chỉ xuất hiện sau khi bạn lưu giá cho nó.
 4. Sản phẩm chỉ có **một** phiên bản thì **không hiện bộ chọn** — chạy như trước. Muốn tắt bộ chọn, bớt về một
    phiên bản.
 5. Mọi phiên bản của sản phẩm đều phải có tên cỡ; nếu có phiên bản để trống thì bộ chọn không hiện.

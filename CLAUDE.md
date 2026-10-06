@@ -135,7 +135,7 @@ Browser                         Next.js (App Router, Node runtime)              
 | `lib/locations.ts` | Vietnam's administrative divisions, read from Sapo and memoised per process |
 | `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
-| `lib/catalog.ts` | Sapo catalog as the app sees it: `getVariantCatalog` (flat, per variant, combo filter `isSellable`), `getVariantIndex` (the one index checkout and quote both price against), `getStorefrontProducts` (grouped, for home/sitemap), `getProductByHandle` → `ProductGroup`. Server-only. See "Variants (T9)" |
+| `lib/catalog.ts` | Sapo catalog as the app sees it: `getVariantCatalog` (flat, per variant, combo and no-price filter `isSellable`), `getVariantIndex` (the one index checkout and quote both price against), `getStorefrontProducts` (grouped, for home/sitemap), `getProductByHandle` → `ProductGroup`. Server-only. See "Variants (T9)" |
 | `lib/product.ts` | Hardcoded product, plus the client-safe variant helpers (`ProductGroup`, `hasChoice`, `selectVariant`, `productHref`, …) |
 | `lib/blocks.ts` | CMS block shapes — **types only, client-safe** (see conventions) |
 | `lib/sanity.ts` | Sanity read client + `groqQuery` (swallows every failure) |
@@ -429,6 +429,7 @@ implemented; the real-order test is done for the VNPAY path (2026-10-06) — a f
   it, each built its own map. `getStorefrontProducts` groups by `productId` for the home page and sitemap,
   because variants share an `alias` and a flat loop would list a product once per size. The combo filter
   `isSellable` now runs **per variant**: a product with one combo size loses that size, not the product.
+  It also withholds a variant with **no price** (price not > 0), so a new size does not appear until the shop sets one.
 - **`quoteTotals` throws `CheckoutError` 409 for a variant missing from the index.** It used to skip it
   silently, which could quote a cart lower than checkout would charge. Error messages name the size.
 - **Order lines carry an optional `variantLabel`** (`PendingOrderLine` in `lib/store.ts`), optional so
@@ -479,9 +480,16 @@ was no Redis, so the in-memory store). The shop had set prices, SKUs and stock o
 - Cleanup: order #1035 was deleted by id (DELETE 200, none left tagged). Deleting does **not** restock:
   230451738 stayed at 67 and the shop has to put its on-hand back to 68 by hand.
 
-**Found on the way, not fixed:** before the shop set prices, two variants sat at price 0 and were treated
-as sellable. The code does not refuse a price ≤ 0, so a size priced 0 would be offered for 0 and VNPAY would
-reject an amount of 0. Suggested follow-up (refuse or hide such a variant), not done.
+**Found on the way, fixed 2026-10-06 (pre-push review):** before the shop set prices, two variants sat at
+price 0 and were treated as sellable. The code did not refuse a price ≤ 0. The earlier claim here that VNPAY
+would reject an amount of 0 was **wrong**: the signed amount is goods + delivery, so a price-0 variant would
+have been paid for with the delivery fee alone, which VNPAY accepts, and beside a basket over the
+free-delivery line (`FREE_SHIPPING_THRESHOLD_VND`, `lib/shipping.ts`) it would have ridden along free, up to
+10 units. **Now withheld in `isSellable` (`lib/catalog.ts`), the same place as the combo filter**, logging
+`catalog.unpriced_withheld`; storefront, cart, quote and checkout share that list, so none offers it.
+**Not exercised against live Sapo data** (no variant is priced 0 now, and the store was not written to): only
+`typecheck` and `lint` pass, and `/api/catalog` still returned the same 9 priced variants on 2026-10-06
+(248000, 348000, 458000, 848000, 268000, 75000, 250000, 50000, 100000).
 
 **Open items — NOT verified, do not treat as fact:**
 

@@ -21,6 +21,9 @@ import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from ".
 import { PRODUCT, type CatalogProduct, type DisplayProduct, type ProductGroup } from "./product";
 
 /**
+ * What may be sold at all: a variant with a real price that is not a combo. Two rules, one gate —
+ * the no-price rule is explained inline below; the combo rule is this comment.
+ *
  * Combo products are withheld from the storefront.
  *
  * **Not a style choice — selling one is a book-keeping error.** A combo variant has no stock of its
@@ -41,6 +44,17 @@ import { PRODUCT, type CatalogProduct, type DisplayProduct, type ProductGroup } 
  * already hold a combo from before this shipped.
  */
 function isSellable(entry: SapoCatalogEntry): boolean {
+  // A variant with no price is a variant somebody has not finished setting up — Sapo reads a missing
+  // price as 0 (`toVnd`). Selling it is not a rejected payment: the amount VNPAY is signed for is
+  // goods + delivery, so a ₫0 size would be paid for with the delivery fee alone, and beside a
+  // basket over the free-delivery line it would ride along for nothing. Withheld here, once, so the
+  // storefront, the cart, the quote and the checkout all agree (they share this list).
+  // isSafeInteger also refuses a mistyped astronomical price, which would lose precision once it is
+  // multiplied by 100 for VNPAY.
+  if (!(Number.isSafeInteger(entry.priceVnd) && entry.priceVnd > 0)) {
+    log.warn("catalog.unpriced_withheld", { variantId: entry.variantId, sku: entry.sku });
+    return false;
+  }
   if (!entry.requiresComponents) return true;
   log.warn("catalog.combo_withheld", { variantId: entry.variantId, sku: entry.sku });
   return false;
@@ -150,9 +164,12 @@ export async function getDisplayProduct(): Promise<DisplayProduct> {
   const entry = await fetchCatalogEntry(cfg, cfg.variantId);
   if (!isSellable(entry)) {
     // Nothing honest to return: the fallback PRODUCT would be the wrong name and the wrong price,
-    // and the real entry cannot be sold without mis-stating stock. Callers already handle a Sapo
-    // failure by saying the catalog is unavailable, which is exactly what this is.
-    throw new Error(`SAPO_VARIANT_ID ${cfg.variantId} is a combo (${entry.sku}); see docs/plan/T8-combo-ton-kho.md`);
+    // and the real entry cannot be sold (a combo mis-states stock; an unpriced variant sells for
+    // nothing). Callers already handle a Sapo failure by saying the catalog is unavailable, which
+    // is exactly what this is.
+    throw new Error(
+      `SAPO_VARIANT_ID ${cfg.variantId} (${entry.sku}) is not sellable: a combo (docs/plan/T8-combo-ton-kho.md) or has no price`,
+    );
   }
   return toCatalogProduct(entry);
 }
