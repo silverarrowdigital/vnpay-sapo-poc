@@ -40,6 +40,12 @@ export interface PendingOrderLine {
   variantId?: number;
   sku: string;
   productName: string;
+  /**
+   * The size/option the customer picked ("200g ~ 66 Servings"). **Optional and absent for a
+   * single-variant product and for any record written before sizes existed** — readers treat a
+   * missing one as "no label", never as an error.
+   */
+  variantLabel?: string;
   unitPriceVnd: number;
   quantity: number;
 }

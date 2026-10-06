@@ -115,6 +115,12 @@ export default function CheckoutForm({
         const json = (await res.json()) as Quote & { error?: string; fields?: FieldErrors; needsProvince?: boolean };
         if (seq !== quoteSeq.current) return; // a newer quote is already in flight
         if (!res.ok) {
+          // A cart problem (a line that is no longer sold) is not the code's fault: leave the code
+          // and its error slot alone. There is no total until that line is removed from the cart.
+          if (json.fields?.lines !== undefined) {
+            setQuote(undefined);
+            return;
+          }
           // A refused code must not leave a stale discount on screen: drop it and say why.
           if (json.fields?.discountCode ?? json.error) setCodeError(json.fields?.discountCode ?? json.error ?? null);
           if (code !== undefined) setAppliedCode(undefined);
@@ -389,7 +395,12 @@ export default function CheckoutForm({
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="m-0 text-sm leading-snug">{product.name}</p>
+                    <p className="m-0 text-sm leading-snug">
+                      {product.name}
+                      {product.variantLabel && (
+                        <span className="block text-xs text-ink-soft">{product.variantLabel}</span>
+                      )}
+                    </p>
                     <p className="m-0 font-mono text-sm whitespace-nowrap">
                       {formatVnd(product.priceVnd * line.quantity)}
                     </p>

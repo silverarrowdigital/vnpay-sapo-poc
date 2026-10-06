@@ -7,7 +7,7 @@ import BlockRenderer from "@/components/blocks/BlockRenderer";
 import { getProductByHandle } from "@/lib/catalog";
 import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, isSoldOut, maxOrderableQuantity } from "@/lib/product";
+import { formatVnd, hasChoice, isSoldOut, maxOrderableQuantity, productHref, selectVariant } from "@/lib/product";
 import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -72,6 +72,7 @@ function MetaRows({ meta }: { meta: ProductMeta | null }) {
 }
 
 type Params = Promise<{ handle: string }>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { handle } = await params;
@@ -84,12 +85,19 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   return {};
 }
 
-export default async function ProductDetailPage({ params }: { params: Params }) {
+export default async function ProductDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams: SearchParams;
+}) {
   const { handle } = await params;
+  const query = await searchParams;
 
-  let product;
+  let group;
   try {
-    product = await getProductByHandle(handle);
+    group = await getProductByHandle(handle);
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
@@ -103,8 +111,12 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
     );
   }
 
-  if (product === null) notFound();
+  if (group === null) notFound();
 
+  // Which size the page shows. A link that names a size we do not have (renamed, mistyped,
+  // truncated) opens the default one instead of a 404 — see selectVariant.
+  const product = selectVariant(group, handle, query);
+  const choice = hasChoice(group);
   const soldOut = isSoldOut(product);
   // A CMS outage must not stop a sale, so it is caught — but caught *here*, outside the cache,
   // so the failure is never recorded as an answer. The page falls back to Sapo's own
@@ -158,7 +170,9 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
             {product.name}
           </h1>
 
-          {meta?.servings ? (
+          {/* "Quy cách" is hidden when sizes exist: the picker already says it, and the two would
+              contradict each other (the field says 50g while the button says 95g). */}
+          {meta?.servings && !choice ? (
             <p className="m-0 -mt-4 mb-4 text-sm text-ink-soft">{meta.servings}</p>
           ) : null}
           {meta?.summary ? (
@@ -183,6 +197,43 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
             </div>
           ) : null}
 
+          {choice && (
+            <fieldset className="m-0 mb-6 min-w-0 border-0 p-0">
+              <legend className="mb-2 p-0 text-[11px] tracking-widest text-ink-soft uppercase">
+                {product.optionName ?? "Lựa chọn"}: <span className="text-ink">{product.variantLabel}</span>
+              </legend>
+              {/* Links, not buttons: each size is its own address, so a size can be shared and the
+                  picker works with no script. A sold-out size is drawn but is not a link. */}
+              <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+                {group.variants.map((v) => {
+                  const selected = v.variantId === product.variantId;
+                  const out = isSoldOut(v);
+                  const cls = `inline-block rounded-full border px-4 py-2 text-sm no-underline ${
+                    selected ? "border-ink bg-ink text-white" : "border-line text-ink"
+                  } ${out ? "cursor-not-allowed opacity-40" : "hover:border-ink"}`;
+                  return (
+                    <li key={v.variantId}>
+                      {out ? (
+                        <span aria-disabled="true" className={`${cls} line-through`}>
+                          {v.variantLabel} <span className="sr-only">(hết hàng)</span>
+                        </span>
+                      ) : (
+                        <Link
+                          href={productHref(v, { pickVariant: true })}
+                          scroll={false}
+                          aria-current={selected ? "true" : undefined}
+                          className={cls}
+                        >
+                          {v.variantLabel}
+                        </Link>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </fieldset>
+          )}
+
           <p className="m-0 font-mono text-xl">
             {formatVnd(product.priceVnd)}
             {product.compareAtPriceVnd !== undefined && (
@@ -204,7 +255,13 @@ export default async function ProductDetailPage({ params }: { params: Params }) 
             </p>
           )}
 
-          <AddToCartForm variantId={product.variantId} soldOut={soldOut} max={maxOrderableQuantity(product)} />
+          {/* Keyed by variant so the quantity stepper starts again at 1 when the size changes. */}
+          <AddToCartForm
+            key={product.variantId}
+            variantId={product.variantId}
+            soldOut={soldOut}
+            max={maxOrderableQuantity(product)}
+          />
 
           {/* The reference shows third-party payment marks here; this project only takes VNPAY, so
               it says so in words rather than borrowing anyone's brand assets. */}

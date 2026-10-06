@@ -1,5 +1,5 @@
 import CheckoutForm from "@/components/CheckoutForm";
-import { getDisplayProducts } from "@/lib/catalog";
+import { getVariantCatalog } from "@/lib/catalog";
 import { getDiscountsEnabled } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
 
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic"; // stock and price must never be served 
 export default async function CheckoutPage() {
   let catalog;
   try {
-    catalog = await getDisplayProducts();
+    catalog = await getVariantCatalog();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (

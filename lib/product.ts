@@ -73,22 +73,118 @@ export interface DisplayProduct {
   /** Plain-text description (HTML from Sapo is stripped server-side). */
   description?: string;
   imageUrl?: string;
+  /**
+   * What distinguishes this variant from its siblings ("200g ~ 66 Servings"). **Empty for a product
+   * with one variant** — Sapo's "Default Title" is filtered out upstream, so anything that prints
+   * this can print it unconditionally.
+   */
+  variantLabel?: string;
+  /** Name of the product's single option ("Size"), used as the page's query key. See lib/sapo.ts. */
+  optionName?: string;
   /** Where the data came from, so the UI can say so. */
   source: "sapo" | "fallback";
 }
 
 /**
- * A product from the Sapo catalog, always backed by a real variant. The storefront only ever lists
- * these, so nothing downstream has to handle a product it could not put in a cart.
+ * A *variant* from the Sapo catalog, always backed by a real variant id. This is the unit that is
+ * priced and put in a cart, so nothing downstream has to handle a line it could not sell. One
+ * Sapo product with four sizes is four of these (see `ProductGroup` for the display side).
  */
 export type CatalogProduct = DisplayProduct & { variantId: number; productId: number };
 
 /**
- * Address of a product's page. The readable slug is preferred, with the variant id as the fallback
- * so a product Sapo never gave an alias still has a working link. The route resolves both.
+ * One product as the storefront shows it: its sellable variants, in Sapo's order. A product with
+ * a single variant has a one-element list and shows no picker.
  */
-export function productHref(p: CatalogProduct): string {
-  return `/products/${encodeURIComponent(p.alias ?? String(p.variantId))}`;
+export interface ProductGroup {
+  productId: number;
+  alias?: string;
+  name: string;
+  variants: CatalogProduct[];
+}
+
+/** The size picker appears only when there is something to pick between. */
+export function hasChoice(g: ProductGroup): boolean {
+  // Every variant needs a label: pills with nothing written on them are not a choice.
+  return g.variants.length > 1 && g.variants.every((v) => v.variantLabel !== undefined);
+}
+
+/** Sold out only when **every** variant is — one size left is still a product that can be bought. */
+export function isGroupSoldOut(g: ProductGroup): boolean {
+  return g.variants.every((v) => isSoldOut(v));
+}
+
+/**
+ * The variant a page opens on with nothing chosen: the first by Sapo's order, or — if that one is
+ * sold out — the first that is not, so a customer never lands on a locked buy button beside a size
+ * that is available.
+ */
+export function defaultVariant(g: ProductGroup): CatalogProduct {
+  return g.variants.find((v) => !isSoldOut(v)) ?? g.variants[0];
+}
+
+/** "From" price when sizes are priced differently, otherwise the one price. */
+export function priceRange(g: ProductGroup): { fromVnd: number; varies: boolean } {
+  const prices = g.variants.map((v) => v.priceVnd);
+  const fromVnd = Math.min(...prices);
+  return { fromVnd, varies: prices.some((p) => p !== fromVnd) };
+}
+
+/** Case, runs of spaces and `+` (a space in a query string) must not stop a label matching itself. */
+function normaliseLabel(s: string): string {
+  return s.replace(/\+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Pick the variant a product page should show.
+ *
+ * Order: `?variant=<id>`, then `?<OptionName>=<label>`, then a numeric path handle (the page's
+ * fallback address for a product with no alias), then the default. **Anything that does not match
+ * falls through to the default rather than failing** — a stale or mistyped link still opens a page
+ * the customer can buy from. Input is only ever compared, never echoed or used as a key.
+ */
+export function selectVariant(
+  g: ProductGroup,
+  handle: string,
+  query: Record<string, string | string[] | undefined>,
+): CatalogProduct {
+  const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+
+  const byId = Number(first(query.variant));
+  if (Number.isSafeInteger(byId) && byId > 0) {
+    const hit = g.variants.find((v) => v.variantId === byId);
+    if (hit !== undefined) return hit;
+  }
+
+  const optionName = g.variants[0]?.optionName;
+  // hasOwn: an option called "constructor" must not read an inherited function off the object.
+  const wanted = optionName !== undefined && Object.hasOwn(query, optionName) ? first(query[optionName]) : undefined;
+  if (typeof wanted === "string" && wanted.length <= 200) {
+    const w = normaliseLabel(wanted);
+    const hit = g.variants.find((v) => v.variantLabel !== undefined && normaliseLabel(v.variantLabel) === w);
+    if (hit !== undefined) return hit;
+  }
+
+  const asVariantId = Number(handle);
+  if (Number.isSafeInteger(asVariantId) && asVariantId > 0) {
+    const hit = g.variants.find((v) => v.variantId === asVariantId);
+    if (hit !== undefined) return hit;
+  }
+  return defaultVariant(g);
+}
+
+/**
+ * Address of a product's page. The readable slug is preferred, with a variant id as the fallback
+ * so a product Sapo never gave an alias still has a working link. The route resolves both.
+ *
+ * Pass a variant of a multi-variant product to link to that exact size (`?Size=…`, or
+ * `?variant=<id>` when the product has no single option name).
+ */
+export function productHref(p: CatalogProduct, opts: { pickVariant?: boolean } = {}): string {
+  const base = `/products/${encodeURIComponent(p.alias ?? String(p.variantId))}`;
+  if (!opts.pickVariant || p.variantLabel === undefined) return base;
+  if (p.optionName !== undefined) return `${base}?${p.optionName}=${encodeURIComponent(p.variantLabel)}`;
+  return `${base}?variant=${p.variantId}`;
 }
 
 /**

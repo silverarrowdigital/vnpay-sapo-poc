@@ -18,7 +18,7 @@
 import { getSapoConfig } from "./config";
 import { log } from "./log";
 import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from "./sapo";
-import { PRODUCT, type CatalogProduct, type DisplayProduct } from "./product";
+import { PRODUCT, type CatalogProduct, type DisplayProduct, type ProductGroup } from "./product";
 
 /**
  * Combo products are withheld from the storefront.
@@ -59,17 +59,23 @@ function toCatalogProduct(entry: SapoCatalogEntry): CatalogProduct {
     unit: entry.unit,
     description: entry.description,
     imageUrl: entry.imageUrl,
+    variantLabel: entry.variantLabel,
+    optionName: entry.optionName,
     source: "sapo",
   };
 }
 
 /**
- * The whole storefront catalog. Throws if Sapo is unreachable.
+ * Every sellable **variant**, flat, in Sapo's order. Throws if Sapo is unreachable.
  *
- * With `SAPO_VARIANT_ID` set this returns just that one product, so the variable still pins the
+ * This is the list that is priced and put in a cart: checkout, quote, the cart drawer and the
+ * checkout page read it. A product with four sizes is four entries here, each with its own price
+ * and stock. Display code that wants "one product, several sizes" uses `getStorefrontProducts`.
+ *
+ * With `SAPO_VARIANT_ID` set this returns just that one variant, so the variable still pins the
  * PoC to a single item when that is what you want.
  */
-export async function getDisplayProducts(): Promise<CatalogProduct[]> {
+export async function getVariantCatalog(): Promise<CatalogProduct[]> {
   const cfg = getSapoConfig(); // throws MissingEnvError when not configured
   if (cfg.variantId !== undefined) {
     // The pinned-variant mode goes through the same gate: SAPO_VARIANT_ID pointing at a combo is a
@@ -78,24 +84,55 @@ export async function getDisplayProducts(): Promise<CatalogProduct[]> {
     const entry = await fetchCatalogEntry(cfg, cfg.variantId);
     return isSellable(entry) ? [toCatalogProduct(entry)] : [];
   }
+  // isSellable runs per variant, so a combo among four sizes removes only itself.
   return (await fetchCatalogEntries(cfg)).filter(isSellable).map(toCatalogProduct);
 }
 
 /**
- * One product by the handle in its URL: Sapo's `alias`, or the variant id as a fallback so a
- * product without an alias is still reachable. `null` when nothing matches, which the page turns
+ * `variantId → variant`, the one index checkout **and** quote price against. Built here once so the
+ * two cannot disagree about which variants exist: a quote that skipped a variant checkout refused
+ * (or the reverse) would show the customer a total that is not the one they are charged.
+ */
+export async function getVariantIndex(): Promise<Map<number, CatalogProduct>> {
+  const byVariant = new Map<number, CatalogProduct>();
+  for (const v of await getVariantCatalog()) byVariant.set(v.variantId, v);
+  return byVariant;
+}
+
+/**
+ * The storefront's view: one entry per Sapo product, holding its sellable variants. The home page,
+ * the sitemap and the product page read this, so a product with four sizes is one tile and one URL
+ * rather than four. Order follows Sapo's; a product whose every variant was withheld is absent.
+ */
+export async function getStorefrontProducts(): Promise<ProductGroup[]> {
+  const groups = new Map<number, ProductGroup>();
+  for (const v of await getVariantCatalog()) {
+    const group = groups.get(v.productId);
+    if (group === undefined) {
+      groups.set(v.productId, { productId: v.productId, alias: v.alias, name: v.name, variants: [v] });
+    } else {
+      group.variants.push(v);
+    }
+  }
+  return [...groups.values()];
+}
+
+/**
+ * One product by the handle in its URL: Sapo's `alias`, or a variant id as a fallback so a product
+ * without an alias is still reachable (and so an old `/products/<variantId>` link keeps working —
+ * `selectVariant` then opens on that variant). `null` when nothing matches, which the page turns
  * into a 404.
  *
  * Filtering the catalog list rather than fetching one product keeps us on the single Sapo endpoint
  * this code has verified against a live store.
  */
-export async function getProductByHandle(handle: string): Promise<CatalogProduct | null> {
-  const products = await getDisplayProducts();
-  const byAlias = products.find((p) => p.alias === handle);
+export async function getProductByHandle(handle: string): Promise<ProductGroup | null> {
+  const groups = await getStorefrontProducts();
+  const byAlias = groups.find((g) => g.alias === handle);
   if (byAlias !== undefined) return byAlias;
   const asVariantId = Number(handle);
   if (!Number.isSafeInteger(asVariantId) || asVariantId <= 0) return null;
-  return products.find((p) => p.variantId === asVariantId) ?? null;
+  return groups.find((g) => g.variants.some((v) => v.variantId === asVariantId)) ?? null;
 }
 
 /** Reads one live product. Throws if Sapo is configured but unreachable. */

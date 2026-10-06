@@ -18,6 +18,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 6 | **T5** — Dựng lại trang sản phẩm theo drinkmarna.com | [T5-product-page-marna.md](T5-product-page-marna.md) | ✅ Xong, áp cho **cả 5 sản phẩm**. **Ảnh vẫn là ảnh tạm** và 7 câu về doanh nghiệp còn chờ thông tin thật — xem ghi chú dưới |
 | 7 | **T6** — Lớp token theo design Figma | [the-hour-tea-nextjs-design.md](../../design/the-hour-tea-nextjs-design.md) | ✅ Xong (commit `6c316f3`). Không có file kế hoạch riêng: design doc chính là đặc tả. **Thang khoảng cách chưa đổi** |
 | 8 | **T7** — Từ bản chạy được thành cửa hàng bán thật | [T7-ban-hang-that.md](T7-ban-hang-that.md) | ⬅️ **Tiếp theo** — chặn ở **T7.0** (bật quyền Private App) |
+| 9 | **T9** — Chọn biến thể (size) cho sản phẩm | [T9-bien-the-san-pham.md](T9-bien-the-san-pham.md) | 🟡 Code xong 2026-10-06, **chưa commit**. Chờ một đơn thật cho size không phải size đầu (sản phẩm thử đang giá 0, tồn kho 0) |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
@@ -63,7 +64,7 @@ Luật này đã có trong repo (`htmlToText` ở `lib/sapo.ts` tước HTML c�
 ## Việc còn lại sau 3 task này (không nằm trong hôm nay)
 
 1. ~~Webhook `/api/revalidate` để Sanity publish là trang cập nhật ngay~~ — xong. Hook `SAPO VNPAY POC` đã trỏ vào `https://vnpay-sapo-poc.vercel.app/api/revalidate`, secret đã có trên Vercel; kiểm bằng `npm run check:revalidate -- <url>`.
-2. Variant picker (`CLAUDE.md` → Known MVP limitations: hiện mỗi sản phẩm chỉ lấy variant đầu theo `position`).
+2. ~~Variant picker~~ — code xong (T9, 2026-10-06). **Còn một việc:** đặt một đơn thật cho size không phải size đầu để kiểm trừ kho và nhãn trên đơn Sapo — xem [T9](T9-bien-the-san-pham.md).
 3. Ảnh sản phẩm thật trên store Sapo (hiện chưa có nên tile hiện placeholder) — hoặc cho phép override ảnh sản phẩm từ Sanity.
 
 ## T4.5 — những chỗ lệch so với kế hoạch

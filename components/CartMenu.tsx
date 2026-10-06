@@ -16,7 +16,7 @@ import { useCart } from "./useCart";
  * The reference drawer also has a discount-code field. There is no discount system behind this
  * project, so it is left out rather than drawn as something that cannot work.
  */
-type CatalogEntry = Pick<DisplayProduct, "name" | "priceVnd" | "imageUrl" | "stock"> & {
+type CatalogEntry = Pick<DisplayProduct, "name" | "variantLabel" | "priceVnd" | "imageUrl" | "stock"> & {
   variantId: number;
   href: string;
 };
@@ -162,6 +162,9 @@ export default function CartMenu() {
                             {product ? (
                               <Link href={product.href} onClick={close} className="no-underline">
                                 {product.name}
+                                {product.variantLabel && (
+                                  <span className="block text-xs text-ink-soft">{product.variantLabel}</span>
+                                )}
                               </Link>
                             ) : (
                               <span className="text-ink-soft">Sản phẩm #{line.variantId}</span>

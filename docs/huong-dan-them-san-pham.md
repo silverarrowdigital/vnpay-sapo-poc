@@ -29,8 +29,7 @@ mô tả cần số id mà Sapo sinh ra.
 - **Tồn kho phải lớn hơn 0** thì mới có nút "Thêm vào giỏ hàng". Nếu bằng 0, trang vẫn hiện
   nhưng chỗ nút mua sẽ ghi "Hết hàng".
 
-> **Lưu ý:** website chỉ lấy **phiên bản đầu tiên** của mỗi sản phẩm. Nếu bạn tạo nhiều phiên bản
-> (95g, 200g…), khách chỉ mua được phiên bản đầu. Đây là giới hạn đã biết của phiên bản hiện tại.
+> **Lưu ý:** nếu muốn bán nhiều cỡ (95g, 200g…), xem mục **"Bán nhiều cỡ (size)"** ở cuối hướng dẫn này.
 
 4. Lưu sản phẩm.
 
@@ -160,6 +159,35 @@ gợi ý pha, và phần câu hỏi thường gặp.
 
 **Điều quan trọng nhất cần nhớ:** sai số id **không báo lỗi**. Trang vẫn chạy, vẫn bán được,
 chỉ là phần mô tả trống. Nên lần nào cũng phải mở trang ra xem.
+
+---
+
+## Bán nhiều cỡ (size) cho một sản phẩm
+
+Ví dụ: cùng một loại trà bán `95g`, `200g`, `5 x 95g`. Trên website, khách thấy một hàng nút để chọn cỡ.
+
+> **Tình trạng:** tính năng đã làm xong nhưng **chưa thử bằng một đơn hàng thật** cho cỡ không phải cỡ đầu
+> (tính đến 2026-10-06). Trước khi bán cỡ thật, hãy nhờ người kỹ thuật đặt thử một đơn.
+
+**Cách làm — tất cả ở Sapo, không đụng Sanity:**
+
+1. Trong sản phẩm, thêm một **tuỳ chọn** và đặt tên là `Size` (chỉ chữ cái và số, không dấu, không dấu cách;
+   tên có dấu hoặc có dấu cách vẫn chạy nhưng địa chỉ trang sẽ dùng mã số thay vì chữ `?Size=`).
+2. Mỗi cỡ là một **phiên bản (variant)**, gõ đúng tên cỡ như muốn khách thấy (ví dụ `200g ~ 66 Servings`).
+3. **Mỗi phiên bản phải có giá riêng, SKU riêng và tồn kho riêng.** Thiếu SKU thì hệ thống dùng tạm một mã
+   mặc định, đơn hàng sẽ khó đối chiếu.
+4. Sản phẩm chỉ có **một** phiên bản thì **không hiện bộ chọn** — chạy như trước. Muốn tắt bộ chọn, bớt về một
+   phiên bản.
+5. Mọi phiên bản của sản phẩm đều phải có tên cỡ; nếu có phiên bản để trống thì bộ chọn không hiện.
+
+**Cần biết:**
+
+- **Phiên bản kiểu combo bị ẩn** khỏi website (vì bán combo không trừ kho). Các cỡ thường của cùng sản phẩm vẫn bán bình thường.
+- **Cỡ hết hàng** vẫn hiện nhưng mờ và không bấm được. Khi **mọi** cỡ hết, sản phẩm mới ghi "Hết hàng".
+- **Gói nhiều hộp (`5 x 95g`, `10 x 95g`) có tồn kho riêng**, không trừ vào kho của cỡ `95g`. Hai con số sẽ lệch
+  dần nếu bạn không tự cân lại bằng tay trong Sapo.
+- Ô **"Quy cách"** trong Sanity sẽ tự ẩn với sản phẩm có nhiều cỡ (để khỏi ghi một đằng, nút chọn ghi một nẻo).
+- Mở trang không kèm cỡ thì chọn sẵn cỡ đầu theo thứ tự trong Sapo, hoặc cỡ còn hàng đầu tiên nếu cỡ đầu hết hàng.
 
 ---
 

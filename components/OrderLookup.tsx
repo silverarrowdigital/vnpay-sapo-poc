@@ -14,7 +14,7 @@ interface OrderDetail {
   totalVnd: number;
   shippingVnd: number;
   discountVnd: number;
-  lines: { title: string; sku?: string; quantity: number; priceVnd: number }[];
+  lines: { title: string; variantTitle?: string; sku?: string; quantity: number; priceVnd: number }[];
   address?: { address1?: string; ward?: string; district?: string; province?: string };
 }
 
@@ -172,7 +172,8 @@ export default function OrderLookup({ initialRef = "" }: { initialRef?: string }
             {order.lines.map((line, i) => (
               <li key={`${line.sku ?? line.title}-${i}`} className="flex justify-between gap-4 border-b border-line py-3 text-sm">
                 <span>
-                  {line.title} × {line.quantity}
+                  {line.title}
+                  {line.variantTitle && ` (${line.variantTitle})`} × {line.quantity}
                   {line.sku !== undefined && <span className="ml-2 font-mono text-xs text-ink-soft">{line.sku}</span>}
                 </span>
                 <span className="font-mono whitespace-nowrap">{formatVnd(line.priceVnd * line.quantity)}</span>

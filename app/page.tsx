@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { getDisplayProducts } from "@/lib/catalog";
+import { getStorefrontProducts } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, isSoldOut, productHref } from "@/lib/product";
+import { defaultVariant, formatVnd, isGroupSoldOut, priceRange, productHref } from "@/lib/product";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
 
@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic"; // stock and price must never be served 
 export default async function CatalogPage() {
   let products;
   try {
-    products = await getDisplayProducts();
+    products = await getStorefrontProducts();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
@@ -63,10 +63,14 @@ export default async function CatalogPage() {
       <hr className="mb-10 border-0 border-t border-line" />
 
       <ul className="grid list-none grid-cols-1 gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
-        {products.map((product) => {
-          const soldOut = isSoldOut(product);
+        {products.map((group) => {
+          // One tile per Sapo product. It shows the variant a visitor would land on, and the link
+          // opens the product page, where the sizes are.
+          const product = defaultVariant(group);
+          const soldOut = isGroupSoldOut(group);
+          const { fromVnd, varies } = priceRange(group);
           return (
-            <li key={product.variantId}>
+            <li key={group.productId}>
               {/* The whole tile is the link; quantity and adding to the cart live on the product page. */}
               <Link href={productHref(product)} className="group block no-underline">
                 <div className="relative aspect-square overflow-hidden rounded-xl bg-cream">
@@ -93,8 +97,9 @@ export default async function CatalogPage() {
 
                 {/* Price above the name, as in the reference. */}
                 <p className="mt-4 mb-1 font-mono text-sm text-ink">
-                  {formatVnd(product.priceVnd)}
-                  {product.compareAtPriceVnd !== undefined && (
+                  {varies && <span className="mr-1">Từ</span>}
+                  {formatVnd(varies ? fromVnd : product.priceVnd)}
+                  {!varies && product.compareAtPriceVnd !== undefined && (
                     <span className="ml-2 text-ink-soft line-through">{formatVnd(product.compareAtPriceVnd)}</span>
                   )}
                 </p>

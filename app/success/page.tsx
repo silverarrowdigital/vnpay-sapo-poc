@@ -118,7 +118,8 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
             <dd className="m-0">
               {order.lines.map((line) => (
                 <div key={line.sku + String(line.variantId)}>
-                  {line.productName} × {line.quantity} — {formatVnd(line.unitPriceVnd * line.quantity)}
+                  {line.productName}
+                  {line.variantLabel ? ` (${line.variantLabel})` : ""} × {line.quantity} — {formatVnd(line.unitPriceVnd * line.quantity)}
                 </div>
               ))}
             </dd>

@@ -104,8 +104,8 @@ Browser                         Next.js (App Router, Node runtime)              
 
 | Path | Role |
 |---|---|
-| `app/page.tsx` | Catalog grid; each tile links to the product page |
-| `app/products/[handle]/page.tsx` | Product page: details, quantity, add to cart |
+| `app/page.tsx` | Catalog grid, one tile per **product** (not per variant); "Từ ₫…" when its sizes differ in price |
+| `app/products/[handle]/page.tsx` | Product page: details, size picker (when the product has sizes), quantity, add to cart |
 | `app/checkout/page.tsx`, `components/CheckoutForm.tsx` | Cart editor + delivery form (client) |
 | `components/useCart.ts` | Cart state in `localStorage`, read through `useSyncExternalStore` |
 | `components/AddToCartForm.tsx`, `components/CartMenu.tsx`, `components/ClearCartOnSuccess.tsx` | Cart controls. `CartMenu` is the header button **and** the drawer in one component, so they share open state without a context |
@@ -133,7 +133,8 @@ Browser                         Next.js (App Router, Node runtime)              
 | `lib/locations.ts` | Vietnam's administrative divisions, read from Sapo and memoised per process |
 | `lib/store.ts` | Pending-order storage + the cross-instance processing claim: Redis when configured, in-memory Map otherwise |
 | `lib/config.ts` | Env var reading + `MissingEnvError` |
-| `lib/product.ts` | Hardcoded product (safe for client import) |
+| `lib/catalog.ts` | Sapo catalog as the app sees it: `getVariantCatalog` (flat, per variant, combo filter `isSellable`), `getVariantIndex` (the one index checkout and quote both price against), `getStorefrontProducts` (grouped, for home/sitemap), `getProductByHandle` → `ProductGroup`. Server-only. See "Variants (T9)" |
+| `lib/product.ts` | Hardcoded product, plus the client-safe variant helpers (`ProductGroup`, `hasChoice`, `selectVariant`, `productHref`, …) |
 | `lib/blocks.ts` | CMS block shapes — **types only, client-safe** (see conventions) |
 | `lib/sanity.ts` | Sanity read client + `groqQuery` (swallows every failure) |
 | `lib/content.ts` | `getProductContent` + `BLOCKS_PROJECTION` shared with the blog |
@@ -404,6 +405,65 @@ Stock deduction is explicit: without an `inventory_behaviour` field Sapo default
 
 Sapo's Order API overview notes payment info/transactions may not be stored for API-created orders; the VNPAY references are therefore also in `note` and `note_attributes`.
 
+## Variants (T9)
+
+A product with more than one Sapo variant shows a size picker; a product with one behaves as before. No
+flag and no Sanity field: the data decides. Plan: `docs/plan/T9-bien-the-san-pham.md`. **Status:
+implemented, real-order test still owed — see the open items.**
+
+- **`fetchCatalogEntries` returns every variant of every active product**, flat, by `position` (it used to
+  take the first only). Each entry carries `variantLabel` — `option1/2/3` joined with ` / `, Sapo's
+  `"Default Title"` dropped so it is **empty** for a single-variant product and never printed to a
+  customer — and `optionName`, set only when the product has exactly one option whose name matches
+  `/^[A-Za-z][A-Za-z0-9_-]{0,29}$/`. That name is the query key (`?Size=`); anything else falls back to
+  `?variant=<id>`.
+- **`lib/catalog.ts` has two views on purpose, and `getDisplayProducts` is gone.** `getVariantIndex`
+  (variantId → variant) is the **one** index `startCheckout` and `quoteTotals` both price against; before
+  it, each built its own map. `getStorefrontProducts` groups by `productId` for the home page and sitemap,
+  because variants share an `alias` and a flat loop would list a product once per size. The combo filter
+  `isSellable` now runs **per variant**: a product with one combo size loses that size, not the product.
+- **`quoteTotals` throws `CheckoutError` 409 for a variant missing from the index.** It used to skip it
+  silently, which could quote a cart lower than checkout would charge. Error messages name the size.
+- **Order lines carry an optional `variantLabel`** (`PendingOrderLine` in `lib/store.ts`), optional so
+  records already in Redis still read. It feeds `/success` only; the order lookup and its printable slip
+  read Sapo's `variant_title` per line, not Redis.
+- **Selection (`selectVariant`, client-safe in `lib/product.ts`)**, in order: `?variant=<id>`,
+  `?<OptionName>=<label>`, a numeric path handle (`/products/<variantId>`), then the default (first by
+  Sapo order, else first in stock). **Input that matches nothing falls back to the default, never a 404.**
+  `hasChoice` = more than one variant **and** every one labelled. A sold-out size is drawn but is not a
+  link; a product is "sold out" in lists only when all its sizes are.
+- **UI side effects.** The Sanity `servings` ("Quy cách") row is hidden when the product has sizes (it
+  would contradict the picker). The label shows in the cart drawer, checkout, `/success` and the order
+  lookup. `CheckoutForm` no longer clears the discount code when `/api/quote` answers 409 on
+  `fields.lines`.
+
+**Verified 2026-10-06 on the live store, read-only, against `next dev`:** product 93155810 ("TEST Size
+Picker", alias `test-size-picker`) has one option, `Size`, with four variants (230361050, 230451738,
+230451739, 230451740; labels `95g ~ 32 Servings`, `200g ~ 66 Servings`, `5 x 95g không hộp`,
+`10 x 95g không hộp`). `/api/catalog` returned all four with labels and the other five products
+unlabelled. `/products/test-size-picker` selected the right size for `?Size=` (both `+` and `%20`),
+`?variant=<id>` and `/products/<variantId>`, and fell back to the default for a garbage value and a
+5000-character one, all 200; `/products/nope` was 404; the sitemap lists the product once. `/api/quote`
+priced a known variant correctly, two sizes as two lines, and answered 409 "Một sản phẩm trong giỏ
+không còn bán." for unknown variant 999. `typecheck`, `lint`, `build` pass; `reviewer` found nothing
+critical.
+
+**Open items — NOT verified, do not treat as fact:**
+
+- **No real order of a non-first size has been placed.** The test product has price 0 and stock 0 on all
+  four variants (as of 2026-10-06), so checkout, stock deduction on the *right* size, and whether the
+  Sapo order line shows `variant_title` are untested (plan checklist item 9).
+- **Unknown whether Sapo's line `title` already includes the size.** If it does, the order-lookup slip
+  prints it twice ("X (200g)" after a title that already says 200g).
+- **The picker has never been rendered with a size in stock** (every size was sold out when tested).
+- **A variant with no SKU falls back to `PRODUCT.sku` (`TEST-001`)** — the first variant of the test
+  product has none. Pre-existing fallback; give every size its own SKU in Sapo.
+- **Multi-pack sizes (`5 x 95g`) keep independent stock** from the single pack, so the two counters drift
+  unless the shop balances them by hand. Same family as T8, milder; not solved here.
+- Reviewer nits left unfixed: the checkout page serialises each variant's copy of the description to the
+  client (N sizes → N copies); the home tile hides compare-at price when sizes differ in price; the labels
+  "A+B" and "A B" match each other in `?Size=`.
+
 ## Sanity CMS flow
 
 Holds how a product is *presented* (and, from T2, the blog). Never price, never stock, never anything checkout reads.
@@ -457,7 +517,6 @@ Rebuilt from `design/reference/` — the owner's own site, saved by `npm run fet
 
 | | Why |
 |---|---|
-| Variant picker (95G / 200G / …) | This project takes one variant per product, the first by `position` |
 | Customer reviews | No source — Sapo does not provide them and no schema exists |
 | Multi-image product gallery | Sapo returns one image per product; the grid holds a single cell. A Sanity `imageSlider` block can carry more |
 | Filter sidebar | The reference reserves a wide left column for facets, which is why its grid sits off-centre. Sapo gives us none, so the grid is centred instead of leaving a 404px gap |
@@ -678,17 +737,17 @@ run**, so the response codes above are from the docs, not from this terminal.
   never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
-- One entry per Sapo product (the first variant by `position`): a product with real options would need a variant picker. Max 10 per line, max 20 lines.
+- Sizes (T9) are one option at most in the URL, and each size is its own variant with its own stock — see "Variants (T9)" for what that does and does not cover. Max 10 per line, max 20 lines.
 
 ## Next steps (not in MVP)
 
 1. ~~Persistent store replacing the Map~~ — done, see `lib/store.ts`. Remaining: reconcile orders whose Redis record expired (24 h TTL).
 2. ~~VNPAY `querydr` reconciliation~~ — done as a read-only script (`npm run querydr`). Remaining: an automatic job, which needs an index of pending references (the store has no key scan) and a decision about who may trigger a write.
-3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). Remaining: a variant picker. (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
+3. ~~Read real products from Sapo~~ — done (`fetchCatalogEntries`). The variant picker is in too (T9, implemented, real-order test pending). (Product images **are** present on the live store — all four products return one each; an earlier note here claiming otherwise was stale.)
 4. ~~Composable product descriptions from a CMS~~ — done (T1, `docs/plan/T1-product-content.md`), and so is the Sanity webhook → `/api/revalidate` (see "Staying on Sanity's free plan").
 5. Blog on Sanity — planned in `docs/plan/T2-blog.md`, reuses the same block array and `BlockRenderer`.
 6. **T8 — combo stock** (`docs/plan/T8-combo-ton-kho.md`). Blocked on one 10-minute check in the Sapo admin that splits "the API path cannot expand a combo" from "Sapo does not track combo components at all".
-7. T7 remainders, in the order they bite: a **variant picker**, still the one thing the catalog cannot express; **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
+7. T7 remainders, in the order they bite: ~~a variant picker~~ (done, T9 — still owes one real order of a non-first size); **combo** as cách A (create the combo as its own Sapo product — no code at all, it flows through the existing path); an **email of our own** if Sapo's receipt turns out not to send; and **restocking a cancelled COD order**, which today is a human in the Sapo admin.
 7. Re-skin the whole project to the reference design — planned in `docs/plan/T3-ui-redesign.md`. The token layer (T0) is already in. Open question recorded in `design/TOKENS.md`: the reference's cart is an in-page popup while this project has a `/checkout` route.
 
 <!-- BEGIN:nextjs-agent-rules -->

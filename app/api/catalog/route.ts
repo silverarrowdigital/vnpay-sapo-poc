@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDisplayProducts } from "@/lib/catalog";
+import { getVariantCatalog } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
 import { productHref } from "@/lib/product";
 
@@ -19,14 +19,15 @@ export const dynamic = "force-dynamic"; // price and stock must never be served 
  */
 export async function GET() {
   try {
-    const products = await getDisplayProducts();
+    const products = await getVariantCatalog();
     return NextResponse.json({
       products: products.map((p) => ({
         variantId: p.variantId,
         name: p.name,
+        variantLabel: p.variantLabel,
         priceVnd: p.priceVnd,
         imageUrl: p.imageUrl,
-        href: productHref(p),
+        href: productHref(p, { pickVariant: true }),
         stock: p.stock,
       })),
     });

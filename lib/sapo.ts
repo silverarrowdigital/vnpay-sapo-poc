@@ -39,11 +39,17 @@ interface SapoVariant {
   inventory_quantity?: number | null;
   unit?: string | null;
   image_id?: number | null;
-  /** 1-based order within the product; used to pick a single representative variant. */
+  /** 1-based order within the product; variants are listed in this order. */
   position?: number | null;
+  /** The variant's value on each of the product's (up to three) options, e.g. "200g ~ 66 Servings". */
+  option1?: string | null;
+  option2?: string | null;
+  option3?: string | null;
 }
 interface SapoProduct {
   id: number;
+  /** Option definitions, e.g. `[{name: "Size", values: [...]}]`. Verified on a live product 2026-10-06. */
+  options?: { name?: string | null }[] | null;
   name?: string | null;
   content?: string | null;
   /** URL slug Sapo generates from the name, e.g. "test-product-1". Sapo's equivalent of a handle. */
@@ -104,6 +110,35 @@ export interface SapoCatalogEntry {
    * the catalog entirely.
    */
   requiresComponents: boolean;
+  /**
+   * What the customer picks between, e.g. "200g ~ 66 Servings" (several options joined with " / ").
+   * **Absent for a product with a single variant**: Sapo then names it "Default Title", which must
+   * never be shown to a customer.
+   */
+  variantLabel?: string;
+  /**
+   * The option's name ("Size"), set only when the product has exactly one option. It is the query
+   * parameter that selects a variant on the product page (`?Size=…`); with several options there is
+   * no single name, and the page falls back to `?variant=<id>`.
+   */
+  optionName?: string;
+}
+
+/** Sapo's placeholder for a product that was never given real options. */
+const DEFAULT_OPTION = "default title";
+
+function variantLabelOf(variant: SapoVariant): string | undefined {
+  const parts = [variant.option1, variant.option2, variant.option3]
+    .map((o) => (o ?? "").trim())
+    .filter((o) => o !== "" && o.toLowerCase() !== DEFAULT_OPTION);
+  return parts.length > 0 ? parts.join(" / ") : undefined;
+}
+
+function optionNameOf(product: SapoProduct): string | undefined {
+  const options = product.options ?? [];
+  const name = options.length === 1 ? (options[0].name ?? "").trim() : "";
+  // The name becomes a query-string key, so refuse anything that would need escaping to be one.
+  return /^[A-Za-z][A-Za-z0-9_-]{0,29}$/.test(name) ? name : undefined;
 }
 
 /**
@@ -128,14 +163,15 @@ function toCatalogEntry(product: SapoProduct, variant: SapoVariant): SapoCatalog
     description: htmlToText(product.content),
     imageUrl: image ?? undefined,
     requiresComponents: variant.requires_components === true || (variant.type ?? "").toLowerCase() === "combo",
+    variantLabel: variantLabelOf(variant),
+    optionName: optionNameOf(product),
   };
 }
 
 /** Sapo orders variants by `position`; a missing position sorts last rather than first. */
-function firstVariant(product: SapoProduct): SapoVariant | undefined {
+function variantsByPosition(product: SapoProduct): SapoVariant[] {
   const variants = (product.variants ?? []).filter((v) => typeof v.id === "number");
-  if (variants.length === 0) return undefined;
-  return [...variants].sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))[0];
+  return [...variants].sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER));
 }
 
 /**
@@ -155,21 +191,19 @@ export async function fetchCatalogEntry(cfg: SapoConfig, variantId: number): Pro
 }
 
 /**
- * Every sellable product, one entry each: the first variant by position. Products with no variant
- * are skipped, and only `status === "active"` is listed, so a draft never reaches the storefront.
+ * Every variant of every active product, flat, in Sapo's order (products as listed, each one's
+ * variants by position). A product with no variant contributes nothing, and only
+ * `status === "active"` is listed, so a draft never reaches the storefront.
  *
- * One entry per product is a deliberate PoC limit — a product with real options would need a
- * variant picker. Because entries already carry variantId, adding that later does not change the
- * shape of a cart line.
+ * Flat on purpose: a cart line is keyed by variantId, so pricing needs to find *any* variant, not
+ * just a product's first. `lib/catalog.ts` groups these back into products for display.
  */
 export async function fetchCatalogEntries(cfg: SapoConfig): Promise<SapoCatalogEntry[]> {
   const data = (await sapoFetch(cfg, "/admin/products.json?limit=250")) as { products?: SapoProduct[] };
   const entries: SapoCatalogEntry[] = [];
   for (const product of data.products ?? []) {
     if ((product.status ?? "active").trim().toLowerCase() !== "active") continue;
-    const variant = firstVariant(product);
-    if (variant === undefined) continue;
-    entries.push(toCatalogEntry(product, variant));
+    for (const variant of variantsByPosition(product)) entries.push(toCatalogEntry(product, variant));
   }
   return entries;
 }
@@ -229,6 +263,8 @@ export interface SapoOrderLine {
   variantId?: number;
   sku: string;
   productName: string;
+  /** Size/option label; only used to title a custom line, since a variant-linked line gets it from Sapo. */
+  variantLabel?: string;
   unitPriceVnd: number;
   quantity: number;
 }
@@ -327,7 +363,12 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
   const lineItems = resolved.map(({ line, variantId }) =>
     variantId !== undefined
       ? { variant_id: variantId, quantity: line.quantity, price: line.unitPriceVnd }
-      : { title: line.productName, sku: line.sku, price: line.unitPriceVnd, quantity: line.quantity },
+      : {
+          title: line.variantLabel !== undefined ? `${line.productName} - ${line.variantLabel}` : line.productName,
+          sku: line.sku,
+          price: line.unitPriceVnd,
+          quantity: line.quantity,
+        },
   );
   const anyVariantLinked = resolved.some(({ variantId }) => variantId !== undefined);
 
@@ -505,7 +546,8 @@ export interface SapoOrderDetail extends SapoOrderRef {
   discountVnd: number;
   /** Digits only, for comparing against what the person looking up the order typed. */
   phoneDigits: string;
-  lines: { title: string; sku?: string; quantity: number; priceVnd: number }[];
+  /** `variantTitle` is Sapo's `variant_title`; absent for a single-variant product ("Default Title"). */
+  lines: { title: string; variantTitle?: string; sku?: string; quantity: number; priceVnd: number }[];
   address?: {
     address1?: string;
     ward?: string;
@@ -523,7 +565,14 @@ interface OrderDetailRow extends OrderListItem {
   total_price?: number | string | null;
   total_shipping_price?: number | string | null;
   total_discounts?: number | string | null;
-  line_items?: { title?: string; name?: string; sku?: string | null; quantity?: number; price?: number | string }[];
+  line_items?: {
+    title?: string;
+    name?: string;
+    variant_title?: string | null;
+    sku?: string | null;
+    quantity?: number;
+    price?: number | string;
+  }[];
   shipping_address?: {
     address1?: string | null;
     ward?: string | null;
@@ -531,6 +580,12 @@ interface OrderDetailRow extends OrderListItem {
     province?: string | null;
     phone?: string | null;
   } | null;
+}
+
+/** A line's size, or `undefined` for Sapo's "Default Title" placeholder, which is never shown. */
+function lineVariantTitle(raw: string | null | undefined): string | undefined {
+  const t = (raw ?? "").trim();
+  return t === "" || t.toLowerCase() === DEFAULT_OPTION ? undefined : t;
 }
 
 /** Keep only digits, so "+84 912 345 678" and "0912345678" compare equal on their last 9. */
@@ -596,6 +651,7 @@ export async function fetchOrderDetailByRef(cfg: SapoConfig, txnRef: string): Pr
     phoneDigits: phoneDigits(row.phone ?? row.shipping_address?.phone),
     lines: (row.line_items ?? []).map((l) => ({
       title: (l.title ?? l.name ?? "").trim() || "Sản phẩm",
+      variantTitle: lineVariantTitle(l.variant_title),
       sku: (l.sku ?? "").trim() || undefined,
       quantity: typeof l.quantity === "number" ? l.quantity : 0,
       priceVnd: toVnd(l.price),

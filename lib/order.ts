@@ -18,10 +18,9 @@ import {
   isSoldOut,
   maxOrderableQuantity,
   type CartLine,
-  type DisplayProduct,
 } from "./product";
 import { quoteShipping, type ShippingQuote } from "./shipping";
-import { getDisplayProducts } from "./catalog";
+import { getVariantIndex } from "./catalog";
 import {
   createOrderOnce,
   fetchOrderDetailByRef,
@@ -232,9 +231,7 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
 
   // Prices and stock come from the live catalog, never from the browser. Reading it here also
   // means a Sapo outage stops checkout before we take money.
-  const catalog = await getDisplayProducts();
-  const byVariant = new Map<number, DisplayProduct>();
-  for (const p of catalog) if (p.variantId !== undefined) byVariant.set(p.variantId, p);
+  const byVariant = await getVariantIndex();
 
   const lines: PendingOrderLine[] = [];
   let goodsVnd = 0;
@@ -246,19 +243,22 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
         lines: "Một sản phẩm trong giỏ không còn bán",
       });
     }
+    // The size is part of what is being bought, so it is part of what the customer is told.
+    const shown = product.variantLabel !== undefined ? `${product.name} (${product.variantLabel})` : product.name;
     if (isSoldOut(product)) {
-      throw new CheckoutError(`${product.name} đã hết hàng.`, 409, { lines: `${product.name} đã hết hàng` });
+      throw new CheckoutError(`${shown} đã hết hàng.`, 409, { lines: `${shown} đã hết hàng` });
     }
     const maxQty = maxOrderableQuantity(product);
     if (wanted.quantity > maxQty) {
-      throw new CheckoutError(`${product.name} chỉ còn ${maxQty} sản phẩm.`, 409, {
-        lines: `${product.name} chỉ còn ${maxQty} sản phẩm`,
+      throw new CheckoutError(`${shown} chỉ còn ${maxQty} sản phẩm.`, 409, {
+        lines: `${shown} chỉ còn ${maxQty} sản phẩm`,
       });
     }
     lines.push({
       variantId: product.variantId,
       sku: product.sku,
       productName: product.name,
+      ...(product.variantLabel !== undefined ? { variantLabel: product.variantLabel } : {}),
       unitPriceVnd: product.priceVnd,
       quantity: wanted.quantity,
     });
@@ -415,15 +415,19 @@ export async function quoteTotals(args: {
 }): Promise<OrderTotals | undefined> {
   const sapo = getSapoConfig();
   if (args.provinceId === undefined) return undefined;
-  const catalog = await getDisplayProducts();
-  const byVariant = new Map<number, DisplayProduct>();
-  for (const p of catalog) if (p.variantId !== undefined) byVariant.set(p.variantId, p);
+  const byVariant = await getVariantIndex();
 
   let goodsVnd = 0;
   let totalUnits = 0;
   for (const wanted of args.lines) {
     const product = byVariant.get(wanted.variantId);
-    if (product === undefined) continue; // the checkout itself refuses this; a quote just skips it
+    if (product === undefined) {
+      // Refuse, exactly as checkout does. Skipping it would price the cart *lower* than checkout
+      // will charge — a summary the customer reads as the total and then does not get.
+      throw new CheckoutError("Một sản phẩm trong giỏ không còn bán.", 409, {
+        lines: "Một sản phẩm trong giỏ không còn bán",
+      });
+    }
     goodsVnd += product.priceVnd * wanted.quantity;
     totalUnits += wanted.quantity;
   }

@@ -1,10 +1,41 @@
 # T9 — Chọn biến thể (Size) cho sản phẩm
 
-**Trạng thái: CHỜ XÁC NHẬN — chưa có dòng code nào.** Tài liệu này là kế hoạch; việc viết code chỉ bắt đầu
-sau khi chủ shop trả lời các câu ở mục "Cần bạn chốt" và nhắn "bắt đầu".
+**Trạng thái (2026-10-06): ĐÃ LÀM XONG CODE — CHỜ KIỂM BẰNG MỘT ĐƠN THẬT.** P1–P4 đã xong trong working tree
+(chưa commit). Còn một việc chặn việc coi là "xong hẳn": đặt một đơn thật cho size **không phải size đầu**
+(mục "Việc còn mở" ngay dưới).
 
-**Đã chốt 2026-10-05:** chủ shop chọn **theo khuyến nghị cho cả 4 câu** ở mục "Cần bạn chốt". Vẫn **chưa
-bắt đầu code**: còn chờ B1 (sản phẩm thử trong Sapo) và lời nhắn "bắt đầu".
+**Đã chốt 2026-10-05:** chủ shop chọn **theo khuyến nghị cho cả 4 câu** ở mục "Cần bạn chốt".
+
+### Đã làm (kiểm 2026-10-06, chỉ đọc, trên máy chạy `next dev`, dữ liệu Sapo thật)
+
+- [x] **P1 — Đọc dữ liệu.** `fetchCatalogEntries` trả mọi variant; `lib/catalog.ts` có chỉ mục phẳng dùng chung
+  (`getVariantIndex`) cho checkout và báo giá, danh mục nhóm theo sản phẩm (`getStorefrontProducts`) cho trang
+  chủ/sitemap; lọc combo theo từng variant; `quoteTotals` báo lỗi 409 thay vì bỏ qua variant lạ.
+- [x] **P2 — Giao diện chọn size.** Hàng nút size dạng link, `Từ ₫…` ở trang chủ, size hết hàng bị làm mờ
+  và không bấm được, đọc `?Size=` / `?variant=<id>` / `/products/<variantId>`, ô "Quy cách" của Sanity ẩn khi
+  sản phẩm có size.
+- [x] **P3 — Nhãn size đi suốt đường mua.** Có ở ngăn kéo giỏ, thanh toán, `/success` (qua `variantLabel` tuỳ
+  chọn trong bản ghi đơn) và tra cứu đơn (đọc `variant_title` của Sapo).
+- [x] **P4 — Tài liệu.** `CLAUDE.md` (mục "Variants (T9)"), mục tạo size trong `docs/huong-dan-them-san-pham.md`.
+- Sản phẩm thử trên Sapo (B1): "TEST Size Picker", mã `93155810`, tuỳ chọn `Size`, 4 variant. Đã kiểm: `/api/catalog`
+  trả đủ 4 size có nhãn, 5 sản phẩm còn lại không nhãn; `?Size=` (cả `+` và `%20`), `?variant=<id>`,
+  `/products/<variantId>` chọn đúng size; chuỗi sai và chuỗi 5000 ký tự rơi về size mặc định (200, không 404);
+  `/products/nope` là 404; sitemap chỉ có sản phẩm này một lần; `/api/quote` tính đúng giá một variant, hai
+  size thành hai dòng, variant `999` không có thì trả **409**. `typecheck`, `lint`, `build` đạt; `reviewer`
+  không thấy lỗi nghiêm trọng.
+
+### Việc còn mở — CHƯA kiểm, không được coi là đã đúng
+
+- [ ] **Mục 9 của danh sách kiểm: một đơn COD thật cho size không phải size đầu.** Sản phẩm thử đang có giá 0 và
+  tồn kho 0 ở cả 4 variant (đọc 2026-10-06), nên chưa thử được: thanh toán, trừ kho **đúng size**, và đơn Sapo
+  có hiện `variant_title` ở dòng hàng không. Việc của bạn (B1): đặt giá và tồn kho thật cho sản phẩm thử.
+- [ ] **Tiêu đề dòng hàng của Sapo đã chứa size chưa?** Nếu rồi, phiếu tra cứu đơn sẽ in size hai lần
+  ("X (200g)" sau một tiêu đề đã ghi 200g). Chỉ biết được khi có đơn thật ở trên.
+- [ ] **Bộ chọn khi size còn hàng** chưa từng được xem (lúc thử cả 4 size đều hết hàng).
+- [ ] **SKU:** variant đầu của sản phẩm thử không có SKU trong Sapo nên code rơi về SKU mặc định `TEST-001`
+  (cơ chế có từ trước). Sản phẩm thật nên cho mỗi size một SKU riêng.
+- Tồn tại, chưa sửa (ghi nhận từ `reviewer`, không nghiêm trọng): trang thanh toán gửi N bản mô tả cho N size;
+  ô ở trang chủ ẩn giá so sánh khi các size khác giá; nhãn "A+B" và "A B" khớp nhau khi đọc `?Size=`.
 
 **Phạm vi:** cho phép một sản phẩm có nhiều lựa chọn (ví dụ `95g ~ 32 Servings`, `200g ~ 66 Servings`,
 …), mỗi lựa chọn có giá, tồn kho, SKU riêng. Sản phẩm không có lựa chọn thì chạy y như bây giờ.
