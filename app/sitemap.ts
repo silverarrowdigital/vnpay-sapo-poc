@@ -3,6 +3,7 @@ import { allPostSlugs } from "@/lib/blog";
 import { getStorefrontProducts } from "@/lib/catalog";
 import { getAppBaseUrl } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
+import { POLICIES } from "@/lib/policies";
 import { defaultVariant, productHref } from "@/lib/product";
 
 /**
@@ -22,6 +23,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const entries: MetadataRoute.Sitemap = [
     { url: base, lastModified: new Date(), changeFrequency: "daily", priority: 1 },
     { url: `${base}/blog`, lastModified: new Date(), changeFrequency: "weekly", priority: 0.8 },
+    { url: `${base}/ve-chung-toi`, changeFrequency: "yearly", priority: 0.5 },
+    { url: `${base}/lien-he`, changeFrequency: "yearly", priority: 0.5 },
+    // The policies change when the shop's terms do, which is rare; no lastModified is claimed rather
+    // than a made-up "now" on every request.
+    ...POLICIES.map((p) => ({ url: `${base}/chinh-sach/${p.slug}`, changeFrequency: "yearly" as const, priority: 0.3 })),
   ];
 
   try {

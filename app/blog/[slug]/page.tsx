@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import BlockRenderer from "@/components/blocks/BlockRenderer";
 import { allPostSlugs, getPostBySlug } from "@/lib/blog";
 import { errorMessage, log } from "@/lib/log";
+import { OPEN_GRAPH } from "@/lib/business";
 
 /**
  * Cached for an hour and tagged `blog`, same as the index — see the note there for why the window
@@ -44,9 +45,10 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
     const title = post.seo?.title ?? post.title;
     const description = post.seo?.description ?? post.excerpt;
     return {
-      title: `${title} — VNPAY → Sapo PoC`,
+      title,
       description,
       openGraph: {
+        ...OPEN_GRAPH,
         type: "article",
         title,
         description,
@@ -88,7 +90,7 @@ export default async function BlogPostPage({ params }: { params: Params }) {
           {post.title}
         </h1>
         <p className="mb-10 text-xs text-ink-soft">
-          {formatPostDate(post.publishedAt)} · {post.authorName ?? "Hour PoC"}
+          {formatPostDate(post.publishedAt)} · {post.authorName ?? "The Hour Tea"}
         </p>
       </div>
 

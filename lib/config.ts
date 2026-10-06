@@ -192,6 +192,23 @@ export function getAppBaseUrl(): string | undefined {
   return base.replace(/\/+$/, "");
 }
 
+/**
+ * May a search engine index this deployment? Only the production one. A preview or a branch
+ * deployment serves the real catalog under another address; indexing it would split the shop's
+ * search results and publish unfinished work.
+ *
+ * `VERCEL_ENV` is set by Vercel ("production" | "preview" | "development") when its system
+ * environment variables are exposed to the project (the default), and is absent under `next dev` and
+ * `next start`, where nothing public points at the server — so absent counts as indexable. If a
+ * project turned that Vercel setting off, previews would become indexable without any warning, which
+ * is why the same variable is relied on in lib/store.ts and why the first preview deployment after a
+ * change here should be checked with a read-only GET of /robots.txt.
+ */
+export function isIndexableDeployment(): boolean {
+  const env = process.env.VERCEL_ENV;
+  return env === undefined || env === "production";
+}
+
 export interface AlertConfig {
   apiKey: string;
   /** Who is told. The shop owner's own address — never a customer's. */

@@ -8,6 +8,10 @@ import { describeResponseCode, normaliseIp } from "@/lib/vnpay";
 
 export const dynamic = "force-dynamic";
 
+// The address carries a payment reference. robots.txt already disallows it; this is the second layer,
+// for a crawler that arrives through a link anyway.
+export const metadata = { title: "Kết quả đơn hàng", robots: { index: false, follow: false } };
+
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
