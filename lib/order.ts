@@ -741,6 +741,20 @@ export const RATE_POLICIES = {
    * keeps failing and who is retrying in good faith — the opposite of who this is for.
    */
   codPhone: { limit: 5, windowSeconds: 3600 },
+  /**
+   * The result page, per IP. It opens with nothing but a reference — a GMT+7 timestamp plus six
+   * digits, so guessable — and shows what was bought and for how much. This caps how fast anyone
+   * can walk through references.
+   *
+   * Deliberately generous, and tied to components/AutoRefresh.tsx: the waiting page reloads itself
+   * every 3 s for its first minute (20 hits) and every 15 s after that (4 a minute), so 120 in 10
+   * minutes is never reached by one customer waiting on one order. It was reached in about six
+   * minutes when the page polled every 3 s for ever — change one of these and check the other.
+   * The window is per IP and shared by every reference, so customers behind one mobile NAT address
+   * share it too. A million candidate references per second of checkout time still makes a sweep
+   * hopeless at this rate.
+   */
+  result: { limit: 120, windowSeconds: 600 },
 } as const satisfies Record<string, RatePolicy>;
 
 /**

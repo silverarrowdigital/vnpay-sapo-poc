@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import AutoRefresh from "@/components/AutoRefresh";
 import ClearCartOnSuccess from "@/components/ClearCartOnSuccess";
-import { getOrder, orderStoreKind, type PendingOrder } from "@/lib/order";
+import { getOrder, orderStoreKind, overRateLimit, type PendingOrder } from "@/lib/order";
 import { formatVnd } from "@/lib/product";
-import { describeResponseCode } from "@/lib/vnpay";
+import { describeResponseCode, normaliseIp } from "@/lib/vnpay";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,16 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
   const outcome = one(sp.outcome); // from /api/vnpay/return, checksum already verified server-side
   const txnRef = one(sp.txnRef);
   const code = one(sp.code);
+
+  // Counted before the order is read, and only when a reference is asked about: this page opens on
+  // a guessable reference alone, so the limit is what stops someone walking through references to
+  // see what others bought. Same IP source as the API routes. Fails open (see overRateLimit), so a
+  // Redis outage never hides a paid order from its customer.
+  if (txnRef) {
+    const h = await headers();
+    const ip = normaliseIp(h.get("x-forwarded-for") ?? h.get("x-real-ip"));
+    if (await overRateLimit("result", ip)) return <RateLimited />;
+  }
 
   // Server-side order state is authoritative (set only by the IPN).
   let order: PendingOrder | undefined;
@@ -192,6 +203,37 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
         </p>
       )}
 
+      <p className="mt-10 flex flex-wrap gap-6">
+        <Link href="/" className="text-sm">
+          ← Về trang sản phẩm
+        </Link>
+        <Link href="/tra-cuu-don" className="text-sm">
+          Tra cứu đơn hàng
+        </Link>
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Shown instead of the order when the result-page limit is hit. It reads no order and does not
+ * auto-refresh — refreshing would only spend more of the limit.
+ *
+ * The wording blames no one and promises nothing it has not checked: the reader may be a customer
+ * on a shared mobile address rather than someone who reloaded, and this page cannot know whether
+ * the payment has been confirmed — so it says "do not pay again" and points to the lookup, without
+ * claiming the order is being processed.
+ */
+function RateLimited() {
+  return (
+    <div className="mx-auto w-full max-w-[720px] px-4 py-16">
+      <h1 className="font-display mb-5 text-[clamp(1.75rem,4vw,2.75rem)] leading-tight font-normal">
+        Tạm thời chưa hiển thị được đơn hàng
+      </h1>
+      <p className={`rounded-lg border px-4 py-3 text-sm ${TONE.warn}`}>
+        Có quá nhiều lượt truy cập từ mạng của bạn nên trang đã ngừng tự cập nhật. Hãy tải lại sau ít phút, hoặc xem
+        đơn ở trang tra cứu bằng mã giao dịch và số điện thoại. Nếu bạn đã thanh toán, đừng thanh toán lại.
+      </p>
       <p className="mt-10 flex flex-wrap gap-6">
         <Link href="/" className="text-sm">
           ← Về trang sản phẩm
