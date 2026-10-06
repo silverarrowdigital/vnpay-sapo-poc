@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Manrope } from "next/font/google";
 import CartMenu from "@/components/CartMenu";
+import { BUSINESS, OPEN_GRAPH } from "@/lib/business";
+import { getAppBaseUrl, isIndexableDeployment } from "@/lib/config";
+import { POLICY_LINKS } from "@/lib/policies";
 import { formatVnd } from "@/lib/product";
 import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 import "./globals.css";
@@ -31,20 +34,24 @@ const manrope = Manrope({
   display: "swap",
 });
 export const metadata: Metadata = {
-  title: "VNPAY → Sapo PoC",
-  description: "Minimal headless checkout: VNPAY Sandbox payment creates an order in Sapo.",
+  // Relative URLs below (canonical, Open Graph) resolve against the public address. Without
+  // APP_BASE_URL (a preview, a fresh clone) it falls back to localhost, which is harmless because
+  // those deployments are not indexable.
+  metadataBase: new URL(getAppBaseUrl() ?? "http://localhost:3000"),
+  title: { default: `${BUSINESS.brand} — Trà Việt cao cấp`, template: `%s | ${BUSINESS.brand}` },
+  description: "Trà Việt từ The Hour Tea. Đặt hàng trực tuyến, thanh toán qua VNPAY, giao hàng toàn quốc.",
+  robots: isIndexableDeployment() ? { index: true, follow: true } : { index: false, follow: false },
+  openGraph: OPEN_GRAPH,
 };
 
 /**
- * Main navigation, copied from the reference storefront (T3.2).
- *
- * `WHOLESALE`, `VỀ CHÚNG TÔI` and `LIÊN HỆ` have no route in this project, so they 404. That is
- * the agreed behaviour: the header matches the reference, and a link to something unbuilt says so
- * honestly rather than being quietly dropped or pointed somewhere misleading.
+ * Main navigation. It followed the reference storefront link for link until 2026-10-06; `Wholesale`
+ * has been dropped since — that address answers 404 on the reference site itself, and a header link
+ * to a page that does not exist is not something to ship. A wholesale page can return when there is
+ * one to link to.
  */
 const NAV = [
   { href: "/", label: "Online shop" },
-  { href: "/wholesale", label: "Wholesale" },
   { href: "/ve-chung-toi", label: "Về chúng tôi" },
   { href: "/lien-he", label: "Liên hệ" },
   { href: "/blog", label: "Blog" },
@@ -62,9 +69,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </p>
 
         <header className="mx-auto flex w-full max-w-[1416px] flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 lg:py-6">
-          {/* A wordmark, not the reference's logo artwork — this is a different project. */}
+          {/* A text wordmark: no logo artwork has been supplied for this build. */}
           <Link href="/" className="font-display mr-auto text-2xl leading-none no-underline">
-            Hour&nbsp;PoC
+            The&nbsp;Hour&nbsp;Tea
           </Link>
 
           <nav aria-label="Chính">
@@ -85,18 +92,55 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main>{children}</main>
 
         <footer className="mt-24 border-t border-line">
-          <div className="mx-auto flex w-full max-w-[1416px] flex-col gap-2 px-4 py-10 text-xs text-ink-soft sm:flex-row sm:items-center sm:justify-between">
-            <p className="m-0">Bản dựng thử nghiệm — thanh toán qua VNPAY Sandbox, đơn hàng ghi vào Sapo.</p>
-            {/* The lookup page lives in the footer rather than the main nav: the reference design's
-                nav is copied link for link, and this is ours, not theirs. A customer looking for
-                their order looks at the bottom of the page — or follows the link on /success. */}
-            <p className="m-0">
-              <Link href="/tra-cuu-don" className="no-underline hover:underline">
-                Tra cứu đơn hàng
-              </Link>
-            </p>
-            <p className="m-0 font-mono">VNPAY → Sapo PoC</p>
+          <div className="mx-auto grid w-full max-w-[1416px] gap-10 px-4 py-12 text-xs text-ink-soft sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid content-start gap-2">
+              <p className="m-0 text-sm font-medium text-ink">{BUSINESS.legalName}</p>
+              <p className="m-0">{BUSINESS.registration}.</p>
+              <p className="m-0">Địa chỉ đăng ký kinh doanh: {BUSINESS.address}.</p>
+            </div>
+
+            <div className="grid content-start gap-2">
+              <p className="m-0 text-sm font-medium text-ink">Hỗ trợ</p>
+              <p className="m-0">
+                Hotline: <a href={`tel:${BUSINESS.hotline}`} className="text-ink underline">{BUSINESS.hotline}</a> ({BUSINESS.hotlineHours})
+              </p>
+              <p className="m-0">
+                Email: <a href={`mailto:${BUSINESS.email}`} className="text-ink underline">{BUSINESS.email}</a>
+              </p>
+              {/* The lookup page lives in the footer rather than the main nav: a customer looking
+                  for their order looks at the bottom of the page — or follows the link on /success. */}
+              <p className="m-0">
+                <Link href="/tra-cuu-don" className="text-ink no-underline hover:underline">
+                  Tra cứu đơn hàng
+                </Link>
+              </p>
+              <p className="m-0 flex gap-4">
+                <a href={BUSINESS.facebook} rel="noopener noreferrer" className="text-ink underline">
+                  Facebook
+                </a>
+                <a href={BUSINESS.instagram} rel="noopener noreferrer" className="text-ink underline">
+                  Instagram
+                </a>
+                <a href={BUSINESS.tiktok} rel="noopener noreferrer" className="text-ink underline">
+                  TikTok
+                </a>
+              </p>
+            </div>
+
+            <div className="grid content-start gap-2">
+              <p className="m-0 text-sm font-medium text-ink">Chính sách</p>
+              {POLICY_LINKS.map((l) => (
+                <p key={l.href} className="m-0">
+                  <Link href={l.href} className="text-ink no-underline hover:underline">
+                    {l.label}
+                  </Link>
+                </p>
+              ))}
+            </div>
           </div>
+          <p className="m-0 border-t border-line px-4 py-4 text-center text-[11px] text-ink-soft">
+            © {new Date().getFullYear()} {BUSINESS.brand}. Thanh toán trực tuyến qua VNPAY.
+          </p>
         </footer>
       </body>
     </html>

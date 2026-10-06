@@ -7,7 +7,8 @@ import BlockRenderer from "@/components/blocks/BlockRenderer";
 import { getProductByHandle } from "@/lib/catalog";
 import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
-import { formatVnd, hasChoice, isSoldOut, maxOrderableQuantity, productHref, selectVariant } from "@/lib/product";
+import { OPEN_GRAPH } from "@/lib/business";
+import { defaultVariant, formatVnd, hasChoice, isSoldOut, maxOrderableQuantity, productHref, selectVariant } from "@/lib/product";
 import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -78,7 +79,24 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   const { handle } = await params;
   try {
     const product = await getProductByHandle(handle);
-    if (product) return { title: `${product.name} — VNPAY → Sapo PoC` };
+    // The page is the same product whatever size is selected, so every ?Size= address names the
+    // plain one as canonical: sizes are one page to a search engine, not four.
+    if (product) {
+      // The variant the sitemap lists, so the canonical and the sitemap entry are one address.
+      const first = defaultVariant(product);
+      const description = first.description?.slice(0, 160);
+      return {
+        title: product.name,
+        description,
+        alternates: { canonical: productHref(first) },
+        openGraph: {
+          ...OPEN_GRAPH,
+          title: product.name,
+          description,
+          ...(first.imageUrl ? { images: [first.imageUrl] } : {}),
+        },
+      };
+    }
   } catch {
     // A Sapo outage must not break the page's own error handling; fall through to the default.
   }

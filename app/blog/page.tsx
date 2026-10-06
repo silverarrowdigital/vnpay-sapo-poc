@@ -7,7 +7,7 @@ import { POSTS_PER_PAGE, listPosts } from "@/lib/blog";
 import { errorMessage, log } from "@/lib/log";
 
 export const metadata: Metadata = {
-  title: "Blog — VNPAY → Sapo PoC",
+  title: "Blog",
   description: "Bài viết về trà và cách thưởng thức.",
 };
 
@@ -88,7 +88,7 @@ export default async function BlogIndexPage({ searchParams }: { searchParams: Se
                     )}
                   </div>
                   <p className="mt-4 mb-2 text-xs text-ink-soft">
-                    {post.authorName ?? "Hour PoC"} <span aria-hidden="true">|</span>{" "}
+                    {post.authorName ?? "The Hour Tea"} <span aria-hidden="true">|</span>{" "}
                     {formatPostDate(post.publishedAt)}
                   </p>
                   <h2 className="font-display m-0 line-clamp-2 text-xl leading-snug font-normal group-hover:underline">

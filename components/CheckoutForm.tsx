@@ -61,6 +61,9 @@ export default function CheckoutForm({
 }) {
   const { lines, setQuantity, remove } = useCart();
   const [submitting, setSubmitting] = useState(false);
+  // The customer agrees to the shop's policies before paying. Not sent to the server and not stored:
+  // it gates the button, and the policies themselves are public pages.
+  const [agreed, setAgreed] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [address, setAddress] = useState<AddressSelection>({});
@@ -353,13 +356,48 @@ export default function CheckoutForm({
           </p>
         )}
 
+        <label className="mt-6 flex cursor-pointer items-start gap-3 text-xs leading-relaxed">
+          <input
+            id="agree-policies"
+            type="checkbox"
+            checked={agreed}
+            onChange={(e) => setAgreed(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Tôi đã đọc và đồng ý với{" "}
+            <a href="/chinh-sach/thanh-toan" target="_blank" rel="noopener" className="text-ink underline">
+              chính sách thanh toán và mua hàng
+            </a>
+            ,{" "}
+            <a href="/chinh-sach/van-chuyen" target="_blank" rel="noopener" className="text-ink underline">
+              vận chuyển
+            </a>
+            ,{" "}
+            <a href="/chinh-sach/doi-tra" target="_blank" rel="noopener" className="text-ink underline">
+              đổi trả
+            </a>{" "}
+            và{" "}
+            <a href="/chinh-sach/bao-mat" target="_blank" rel="noopener" className="text-ink underline">
+              bảo mật
+            </a>{" "}
+            của cửa hàng.
+          </span>
+        </label>
+
         <button
           type="submit"
-          disabled={submitting || !canPay}
+          disabled={submitting || !canPay || !agreed}
+          aria-describedby={canPay && !agreed ? "agree-hint" : undefined}
           className="mt-6 w-full cursor-pointer rounded-full border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? (payWith === "cod" ? "Đang tạo đơn…" : "Đang chuyển tới VNPAY…") : payLabel}
         </button>
+        {canPay && !agreed && (
+          <p id="agree-hint" className="mt-3 text-center text-xs text-ink-soft">
+            Đánh dấu vào ô đồng ý ở trên để tiếp tục thanh toán.
+          </p>
+        )}
         {!addressComplete && rows.length > 0 && (
           <p className="mt-3 text-center text-xs text-ink-soft">
             Chọn đủ tỉnh/thành, quận/huyện và phường/xã để tính phí vận chuyển.
