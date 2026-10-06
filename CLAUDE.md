@@ -117,7 +117,8 @@ Browser                         Next.js (App Router, Node runtime)              
 | `app/api/revalidate/route.ts` | Sanity content webhook → `revalidateTag`. Signature-checked |
 | `app/sitemap.ts` | Listings, products and posts |
 | `sanity/schemas/post.ts`, `sanity/schemas/author.ts` | Blog schemas. `post.body` uses the same `blocksField` as `productContent` |
-| `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state |
+| `app/success/page.tsx`, `components/AutoRefresh.tsx` | Result page; server component reading order state. Shows **no delivery address** (the page opens with only a reference — security rule 6) and no developer wording |
+| `app/not-found.tsx`, `app/error.tsx`, `app/global-error.tsx` | Customer-facing 404 / error / root-error pages in Vietnamese (T10). Not exercised in a browser yet |
 | `app/api/checkout/route.ts` | Validate input, start checkout, return a VNPAY URL **or** create the COD order |
 | `app/api/quote/route.ts` | Price a cart for display: goods, discount, delivery, total. Calls the same `quoteTotals` the real checkout uses, so the summary cannot drift from the charge |
 | `app/api/locations/route.ts` | Provinces / districts / wards, one level at a time. Refuses to serve a whole table |
@@ -165,6 +166,7 @@ Browser                         Next.js (App Router, Node runtime)              
   - `lib/shipping.ts` is client-safe **so that there is exactly one fee calculation**. The fee has to show in the checkout summary, be added to the amount the VNPAY URL is signed with, and be sent to Sapo as a `shipping_line`; the plan's third big risk is those three disagreeing. One pure function used by all three makes them agree by construction, and the browser only ever displays what it returns.
 - The UI is built from the token layer at the top of `app/globals.css` (`--ink`, `--accent`, `--step-*`, `--space-*`, `--radius-*`, `--font-*`), extracted from `design/reference/` with every value's source recorded in `design/TOKENS.md`. New components use the variables; no hardcoded colours or pixel values. There is **no dark mode** — the reference design has one theme, so inventing a second with nothing to check it against was not worth the contrast work.
 - Prices are always computed on the server from the live Sapo catalog; never trust amounts from the browser. That now covers three numbers, not one: the goods subtotal, the **delivery fee** (from the resolved province) and the **discount** (from a Sapo price rule). The browser sends quantities, three address ids and a discount *code* — nothing else about money.
+- **Error boundaries in this Next (16.3) receive `retry`, not `reset`** (`app/error.tsx`, `app/global-error.tsx`). Code written from memory of older Next uses `reset` and fails. Verified in `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/error.md`.
 - Log with `log.info/warn/error(event, data)`. Never log secrets or full customer records (txnRef, amounts, codes, Sapo ids are fine).
 - Keep integrations in their module; routes stay thin.
 
@@ -183,7 +185,7 @@ See `.env.example`. All server-only (no `NEXT_PUBLIC_` prefix).
 | `SAPO_VARIANT_ID` | no | Attach line item to a real Sapo variant instead of a custom line item. Also enables stock deduction (see below) |
 | `DISCOUNTS_ENABLED` | no | `false` stops every discount code being honoured, within one request and with no deploy. An operational kill switch: the codes live in Sapo and this app has read-only access to them on purpose, so there is otherwise no way from here to retire one. Default on |
 | `SAPO_SEND_RECEIPT` | no | `true` asks Sapo to email the customer its own order confirmation. Off by default on purpose — see below |
-| `VNPAY_QUERYDR_URL` | no | Override for the `querydr` endpoint used by `npm run querydr` and `npm run refund` (same endpoint). Defaults to the sandbox one |
+| `VNPAY_QUERYDR_URL` | no | Override for the `querydr` endpoint used by `npm run querydr` and `npm run refund` (same endpoint). Defaults to the sandbox one. Both scripts now **refuse to run** when `VNPAY_PAYMENT_URL` is a non-sandbox host and this is unset. **Known gap:** the guard reads only `.env.local`, so production credentials copied there without the production `VNPAY_PAYMENT_URL` would not trigger it (T10.5) |
 | `VNPAY_REFUND_CREATE_BY` | no | Who a refund is recorded as being requested by (`vnp_CreateBy`). Defaults to `shop-admin` |
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` | no locally, **yes on serverless** | Redis (Upstash) for the shared pending-order store. Injected by Vercel's Marketplace Redis integration |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | no | Same thing under Upstash's own names, for a database created outside Vercel. Takes precedence over the `KV_*` pair |
@@ -222,7 +224,11 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
 5. Signature comparison is constant-time.
 6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code. The
    order-lookup page accepts a prefilled reference in its query string but **never** the phone
-   number, so a shared link is not a shared address book.
+   number, so a shared link is not a shared address book. **The result page (`/success`) shows no
+   delivery address either** (changed 2026-10-06, T10): it opens with only a reference, which is a
+   GMT+7 timestamp plus six digits (now from `crypto.randomInt`, but still only ~10^6 guesses per
+   second of timestamp), and it has **no rate limit**. The address appears only on the phone-gated
+   order lookup. Do not add it back to `/success`.
 7. Never invent API endpoints. Anything new must be checked against the official docs listed below.
 8. **No CMS content is ever rendered as HTML.** `htmlToText` already strips Sapo's description; Sanity rich text goes through Portable Text into our own React elements (`components/blocks/RichText.tsx`). No `dangerouslySetInnerHTML` anywhere.
 9. **A video block stores `provider` (enum) + `videoId` (regex-validated), never a URL and never an iframe.** The player address is assembled in `components/blocks/VideoEmbed.tsx`, so nothing typed into the CMS can retarget the frame. The iframe is also not created until the reader presses play, so a reader who never watches sends no request to the video host.

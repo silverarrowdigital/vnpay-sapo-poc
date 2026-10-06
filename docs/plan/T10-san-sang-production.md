@@ -1,6 +1,9 @@
 # T10 — Từ bản chạy thử đến production thật
 
-**Trạng thái: KẾ HOẠCH, CHỜ DUYỆT — chưa có dòng code nào.** Viết 2026-10-06 sau khi quét toàn bộ
+**Trạng thái (cập nhật 2026-10-06): ĐÃ LÀM LÔ ĐẦU TIÊN (commit `0bf8a50`); phần còn lại vẫn chờ duyệt.**
+Lô đầu đã qua `typecheck`, `lint`, `build`, kiểm cú pháp script, và một lượt `reviewer` độc lập (không có lỗi
+nghiêm trọng). **CHƯA kiểm:** các trang mới trên trình duyệt, và bất kỳ giao dịch thật nào sau các chỉnh sửa
+này. Mục 3 ghi từng việc là XONG hay CÒN MỞ. Kế hoạch gốc viết 2026-10-06 sau khi quét toàn bộ
 mã nguồn (giao `Explore`, đọc từng file) và đo production bằng request chỉ đọc. Mọi con số "đo" dưới đây
 là đo ngày 2026-10-06; điều gì chưa kiểm thì ghi rõ là chưa kiểm.
 
@@ -129,14 +132,14 @@ Mức: **P0** = chặn go-live · **P1** = nên có trước hoặc ngay sau go-
 
 | ID | Việc | Mức | Qua `reviewer`? |
 |---|---|---|---|
-| **T10.1** | **Gỡ dấu PoC**: title/description/logo/footer/banner (banner đọc **cùng hằng** `FREE_SHIPPING_THRESHOLD_VND` để không lệch nữa); bỏ chữ kỹ thuật ở `/success` và lỗi tiếng Anh ở trang chủ; ghi chú đơn Sapo theo môi trường (không cứng "Sandbox") | P0 | Có (đụng `lib/sapo.ts`) |
-| **T10.2** | **Trang còn thiếu**: `not-found`, `error`, `global-error` tiếng Việt; tạo `/ve-chung-toi`, `/lien-he`, 4 trang chính sách (bản nháp); bỏ hoặc làm `/wholesale`; thông tin doanh nghiệp ở footer; ô đồng ý điều khoản ở thanh toán | P0 | Không (không đụng tiền); có nếu sửa `CheckoutForm` |
-| **T10.3** | **`/success` không lộ địa chỉ**: chỉ hiện địa chỉ khi có bằng chứng người xem là người mua; giới hạn tốc độ; sinh mã giao dịch bằng `crypto` | P0 | **Có** (đụng `lib/vnpay.ts`, `app/success`) |
-| **T10.4** | **Cảnh báo đơn kẹt + đối soát**: gửi alert khi `sapo_error`/IPN lỗi; lưu chỉ mục các đơn đang chờ (store hiện không quét được key) để một job chạy `querydr` và báo; kéo dài TTL bản ghi đã thanh toán chưa có đơn Sapo | P0 | **Có** (đụng `lib/store.ts`, `lib/order.ts`) — **việc lớn, nên vào plan mode** |
-| **T10.5** | **Chuyển sandbox → production**: đưa `VNPAY_QUERYDR_URL` vào `.env.example` và cấu hình; không còn mặc định sandbox ngầm ở đường production; viết **runbook go-live** từng bước (env, portal, domain, diễn tập) | P0 | Có (đụng `lib/config.ts`) |
+| **T10.1** | **Gỡ dấu PoC**: title/description/logo/footer/banner (banner đọc **cùng hằng** `FREE_SHIPPING_THRESHOLD_VND` để không lệch nữa); bỏ chữ kỹ thuật ở `/success` và lỗi tiếng Anh ở trang chủ; ghi chú đơn Sapo theo môi trường (không cứng "Sandbox") <br>**XONG một phần (0bf8a50, 2026-10-06):** banner đọc `FREE_SHIPPING_THRESHOLD_VND` qua `formatVnd` (trước đó cứng "489k" trong khi mã tính phí dưới 500.000); `/success` bỏ chữ Sapo/IPN/"xem log server"; ghi chú đơn Sapo là "Paid via VNPAY." (không còn "Sandbox" — nhưng chưa phân biệt theo môi trường, chỉ bỏ chữ); hai lỗi tiếng Anh ở trang chủ đã thành tin nhắn tiếng Việt. <br>**CÒN MỞ:** title, description, logo, footer — cần tên thương hiệu thật (O8) | P0 | Có (đụng `lib/sapo.ts`) |
+| **T10.2** | **Trang còn thiếu**: `not-found`, `error`, `global-error` tiếng Việt; tạo `/ve-chung-toi`, `/lien-he`, 4 trang chính sách (bản nháp); bỏ hoặc làm `/wholesale`; thông tin doanh nghiệp ở footer; ô đồng ý điều khoản ở thanh toán <br>**XONG một phần:** `app/not-found.tsx`, `app/error.tsx`, `app/global-error.tsx` bằng tiếng Việt (chưa mở thử trên trình duyệt). <br>**CÒN MỞ:** trang về chúng tôi/liên hệ/chính sách, `/wholesale`, thông tin doanh nghiệp ở footer, ô đồng ý điều khoản — cần O3 | P0 | Không (không đụng tiền); có nếu sửa `CheckoutForm` |
+| **T10.3** | **`/success` không lộ địa chỉ**: chỉ hiện địa chỉ khi có bằng chứng người xem là người mua; giới hạn tốc độ; sinh mã giao dịch bằng `crypto` <br>**XONG phần lớn:** `/success` không còn hiện "Giao tới" (địa chỉ chỉ còn ở trang tra cứu đơn, nơi phải nhập số điện thoại); trạng thái hiện bằng nhãn tiếng Việt thay vì `sapo_error`; gợi ý backend của store chỉ hiện khi `NODE_ENV !== "production"`; trạng thái `sapo_error` báo khách tải lại sau vài phút (trang không tự làm mới ở trạng thái này; VNPAY gọi lại IPN mỗi 5 phút, tối đa 10 lần, nên có thể mất 5–50 phút). `createTxnRef` dùng `crypto.randomInt` (định dạng không đổi, vẫn 6 chữ số ngẫu nhiên, nên bảo vệ thật sự là `/success` không còn lộ địa chỉ). <br>**CHƯA làm:** giới hạn tốc độ cho `/success` — **không được thêm** ở lô này | P0 | **Có** (đụng `lib/vnpay.ts`, `app/success`) |
+| **T10.4** | **Cảnh báo đơn kẹt + đối soát**: gửi alert khi `sapo_error`/IPN lỗi; lưu chỉ mục các đơn đang chờ (store hiện không quét được key) để một job chạy `querydr` và báo; kéo dài TTL bản ghi đã thanh toán chưa có đơn Sapo <br>**CÒN MỞ toàn bộ** | P0 | **Có** (đụng `lib/store.ts`, `lib/order.ts`) — **việc lớn, nên vào plan mode** |
+| **T10.5** | **Chuyển sandbox → production**: đưa `VNPAY_QUERYDR_URL` vào `.env.example` và cấu hình; không còn mặc định sandbox ngầm ở đường production; viết **runbook go-live** từng bước (env, portal, domain, diễn tập) <br>**XONG một phần:** `VNPAY_QUERYDR_URL` đã có trong `.env.example`; `scripts/querydr.mjs` và `scripts/refund.mjs` từ chối chạy khi `VNPAY_PAYMENT_URL` không phải host sandbox mà `VNPAY_QUERYDR_URL` chưa đặt. **LỖ HỔNG ĐÃ BIẾT (chưa sửa):** rào chỉ nhìn thấy `.env.local`; nếu chép khoá production vào đó mà không chép `VNPAY_PAYMENT_URL` production thì rào không kích hoạt. <br>**CÒN MỞ:** runbook go-live; rà soát cấu hình production | P0 | Có (đụng `lib/config.ts`) |
 | **T10.6** | **Nền móng vận hành**: security headers (CSP chạy chế độ báo cáo trước), `robots.txt`, favicon, health endpoint, `maxDuration` cho IPN | P1 | Có nếu đụng `app/api/vnpay` |
 | **T10.7** | **SEO**: title template, `metadataBase`, OG, canonical, JSON-LD Product, sitemap có `lastModified` thật | P1 | Không |
-| **T10.8** | **Sửa lỗi nhỏ**: `phoneRateKey` (`\D`), giới hạn tốc độ cho `/api/quote` không mã và `/api/catalog`, race `INCR`/`EXPIRE` | P1 | **Có** (đụng `lib/order.ts`, `lib/store.ts`) |
+| **T10.8** | **Sửa lỗi nhỏ**: `phoneRateKey` (`\D`), giới hạn tốc độ cho `/api/quote` không mã và `/api/catalog`, race `INCR`/`EXPIRE` <br>**XONG một phần:** chỉ `phoneRateKey` (`/D+/` → `/\D+/`; không có tác dụng khi COD còn tắt). **CÒN MỞ:** hai giới hạn tốc độ và race `INCR`/`EXPIRE` | P1 | **Có** (đụng `lib/order.ts`, `lib/store.ts`) |
 | **T10.9** | **CI**: GitHub Actions chạy typecheck + lint + build cho mỗi PR; Dependabot | P1 | Không |
 | **T10.10** | **Chịu tải Sapo**: đệm ngắn cho catalog **chỉ để hiển thị** (checkout vẫn đọc Sapo trực tiếp) | P1 | **Có** — phụ thuộc quyết định ở mục 4 |
 | **T10.11** | Dọn: font bên thứ ba, `design/reference/`, ảnh sản phẩm qua `next/image`, skip-link, phân trang catalog | P2 | Không |
@@ -189,3 +192,47 @@ Khuyến nghị: **thử `SAPO_SEND_RECEIPT=true` với một đơn thật gửi
 - Nhánh chặn giá ≤ 0 với dữ liệu giá 0 thật.
 - Cài đặt Vercel (deployment protection, tên miền, phạm vi biến môi trường), portal VNPAY, gói/hạn mức Redis và Sanity: tôi **không có quyền đọc**; cần bạn xác nhận hoặc cài `vercel` CLI.
 - HSTS trên tên miền riêng (hiện chỉ đo được trên `*.vercel.app`).
+- Lô đầu của T10 (`0bf8a50`): các trang mới (`not-found`, `error`, `global-error`, `/success` sau khi sửa) chưa mở trên trình duyệt, và chưa có giao dịch thật nào sau các chỉnh sửa này.
+
+---
+
+## 7. So sánh với thehourtea.com (đối chiếu ngày 2026-10-06)
+
+thehourtea.com là site của chính bạn, nơi giao diện shop này được sao chép. Số liệu dưới đây **đo ngày 2026-10-06 bằng request chỉ đọc** vào phần công khai. **Giới hạn:** chỉ thấy phần front end công khai; trang thanh toán do Shopify lưu trữ nên **chưa xem được**; `/account` trả 406 cho `curl` nên **chưa xác nhận có tồn tại**. Mục ghi "suy ra" là suy từ header Content-Security-Policy, **không phải đã thấy chạy**. Site đó chạy trên Shopify (Hydrogen/Oxygen) kết hợp Sanity, đứng sau Cloudflare.
+
+| # | Mảng | thehourtea.com (đo được) | Dự án này | Khoảng cách / mức |
+|---|---|---|---|---|
+| 1 | Danh mục | Sitemap liệt kê khoảng 24 sản phẩm (15 trên `/shop`) gồm cả phụ kiện; từ 7 bộ sưu tập: `tea-by-hour`, `newtea2026`, `oolong`, `green`, `black`, `healthy-digestion`, `natural-anti-oxydants` | 1 sản phẩm thật + 4 sản phẩm thử (9 variant), không có bộ sưu tập | Lớn; phần nhập hàng là việc của bạn (O4); bộ sưu tập: T10.13 |
+| 2 | Tìm kiếm | `/search?q=tra` trả 200; trang chủ khai báo `SearchAction` trong JSON-LD | Không có | T10.13 (P2) |
+| 3 | Trang sản phẩm | Variant với 4 size có giá (318.000 / 408.000 / 698.000 / 1.248.000 trên một sản phẩm); đánh giá khách (7 `Review` + `AggregateRating` trong JSON-LD); JSON-LD `Product`/`Offer`/`MerchantReturnPolicy`/`OfferShippingDetails`/`BreadcrumbList`; availability `InStock` | Có variant (T9); **không** có đánh giá; **không** có JSON-LD | Đánh giá: O11; JSON-LD: T10.14 (P1) |
+| 4 | Trang nội dung | `/about`, `/contact`, `/blogs` (4 bài được link ở trang chủ); menu "Chuyện của The Hour / Chuyện của Trà / Online Shop / Liên hệ / Blog". `/wholesale` trả **404 ngay trên site thật**, dù header của ta sao chép link "Wholesale" | `/about`, `/contact`, `/wholesale` đều 404; blog có | Đã nằm trong T10.2; nên bỏ link `/wholesale` thay vì làm trang |
+| 5 | Pháp lý, niềm tin | 4 trang chính sách ở `/policies/{privacy-policy,refund-policy,shipping-policy,terms-of-service}`, đều 200; footer in số đăng ký/mã số thuế của công ty, ngày cấp, nơi cấp, địa chỉ đăng ký, hotline kèm giờ làm việc, email, và huy hiệu đăng ký dẫn tới online.gov.vn (thông báo với Bộ Công Thương) | Không có thứ nào trong số này | P0, đã nằm trong T10.2 + O3; huy hiệu: O12 |
+| 6 | SEO | canonical, `og:title`/`og:image`, meta description, robots `index,follow`; `robots.txt` (chặn giỏ/thanh toán/tài khoản/đơn, trỏ tới sitemap); sitemap gồm sản phẩm + bộ sưu tập + trang; JSON-LD `Organization`/`WebPage`/`SearchAction` | Chỉ có sitemap (mọi `lastModified` = bây giờ); không `robots.txt`, không canonical, không OG ở sản phẩm | Đã nằm trong T10.6/T10.7 (P1) |
+| 7 | Header bảo mật | CSP, `frame-ancestors 'none'`, nosniff, HSTS (max-age 1 năm) | Chỉ HSTS | Đã nằm trong T10.6 (P1) |
+| 8 | Hỗ trợ, tiếp thị | Widget chat trực tiếp (tawk.to trong CSP — **suy ra**); form đăng ký nhận tin ở footer; link Facebook/Instagram/TikTok; beacon analytics của Shopify; SendGrid trong CSP (**suy ra**: mail giao dịch hoặc bản tin) | Không có | T10.15–T10.17 (P2, P1 cho email) |
+| 9 | Phí giao | CSP cho phép một API distance-matrix (**suy ra**: phí theo khoảng cách; **chưa kiểm chứng**) | Phẳng 30.000₫, miễn từ 500.000₫ | Số của shop (O5) |
+| 10 | Thanh toán, tài khoản | Thanh toán do Shopify lưu trữ ở subdomain `checkout.` (**chưa thấy** các phương thức); `/account` có vẻ nằm sau bộ lọc bot (**chưa xác nhận**) | Thanh toán tự làm, chỉ VNPAY, COD tắt, không tài khoản (chủ ý) | Khác kiến trúc, không phải thiếu sót |
+| 11 | Đơn hàng | Shopify | Sapo (back office khác). "Ngang bằng" ở đây nghĩa là shop xử lý được đơn — với ta đã chứng minh bằng đơn #1035/#1036 trên sandbox | Không có khoảng cách đã biết |
+
+### Kết luận
+
+**Ngang bằng, theo những gì đã đo:** blog; chọn variant/size có giá (T9); luồng thanh toán và tạo đơn chạy thật trên sandbox. Mã giảm giá có ở ta (Sapo `price_rules`) nhưng lần đo này **không** xem được bên thehourtea.com nên không so.
+
+**Còn thiếu mà T10 chưa có**, đề xuất thêm:
+
+| ID | Việc | Mức |
+|---|---|---|
+| T10.12 | Nhập đủ catalog thật (là O4 mở rộng) và kiểm trang chủ/lưới khi có ~24 sản phẩm: phân trang, hiệu năng | P1 |
+| T10.13 | Bộ sưu tập (collections) và tìm kiếm, kèm `SearchAction` | P2 |
+| T10.14 | JSON-LD `Product`/`Offer` với chính sách đổi trả và vận chuyển, `BreadcrumbList`, `Organization` (gộp được với T10.7; phụ thuộc có trang chính sách) | P1 |
+| T10.15 | Form nhận tin ở footer và link mạng xã hội (cần chọn dịch vụ gửi tin; link cần địa chỉ tài khoản của bạn) | P2 |
+| T10.16 | Chat hỗ trợ (cần chọn dịch vụ; chú ý CSP của T10.6) | P2 |
+| T10.17 | Email giao dịch của riêng shop nếu Sapo không gửi (liên quan O6, T10.4) | P1 |
+| T10.18 | Analytics (cần chọn công cụ và cân nhắc đồng ý cookie) | P2 |
+
+**Việc cần bạn quyết định** (không đặt mức ưu tiên thay bạn):
+
+| # | Việc | Ghi chú |
+|---|---|---|
+| **O11** | Có đưa **đánh giá khách hàng** vào không | Cần nguồn dữ liệu (Sapo không cung cấp, chưa có schema); nội dung đánh giá là của khách thật, không tự tạo |
+| **O12** | Có nộp **thông báo website thương mại điện tử với Bộ Công Thương** (huy hiệu online.gov.vn) không, và ai nộp | Thủ tục và điều kiện áp dụng cho bạn **tôi chưa kiểm chứng**; cần hỏi người có chuyên môn pháp lý. Việc này chạm tới O3 |
