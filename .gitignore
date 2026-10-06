@@ -24,3 +24,9 @@ dist/
 # Bản export dataset Sanity (sanity dataset export). Chứa nội dung + ảnh thật,
 # không vào repo; xem docs/plan/README.md phần backup.
 backups/
+
+# Agent skills installed by Vercel Marketplace integrations (Upstash QStash...). Third-party, and
+# .claude/skills holds absolute symlinks into this machine, so they must not be committed.
+.agents/
+.claude/skills/
+skills-lock.json
