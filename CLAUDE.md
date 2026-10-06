@@ -35,10 +35,11 @@ not happen.**
    shop owner's tasks are separate from the code), lists the decisions it needs with a recommendation for
    each, and ends on an explicit gate: **no code until the user says to start.**
 3. **Implement** → in the main session, following the plan file.
-4. **Test** → there is **no unit-test framework** in this repo, so "tests" means `npm run typecheck`,
-   `npm run lint`, `npm run build` and the `curl` / script checks listed under "Test". Run them through
-   `test-runner` so long logs stay out of the main context. Write automated tests in the main session only
-   where a framework exists; do not add one as a side effect of another task.
+4. **Test** → "tests" means `npm test` (Vitest, since 2026-10-06), `npm run typecheck`, `npm run lint`,
+   `npm run build` and the `curl` / script checks listed under "Test". Run them through `test-runner` so
+   long logs stay out of the main context. **New code on the money path (the list in step 6) comes with a
+   unit test in `lib/*.test.ts`**, written in the main session; the tests need no network and no
+   credentials, so running them is always safe. Do not add a second framework as a side effect of another task.
    - **`test-runner` makes read-only requests only.** Never `POST /api/checkout` with a real variant (a COD
      checkout creates a real Sapo order and deducts real stock, and even a refused attempt spends
      rate-limit hits), never `npm run clean:orders -- --yes`, `npm run refund -- … --confirm`,
@@ -152,6 +153,9 @@ Browser                         Next.js (App Router, Node runtime)              
 | `scripts/check-locations.mjs` | Watch Sapo's province/district/ward tables for Vietnam's 2025 reorganisation. Read-only; exits non-zero when the shape changes |
 | `scripts/refund.mjs` | Refund a VNPAY transaction. **Dry run unless `--confirm`**; reads the genuine references out of the Sapo order and never writes to Sapo |
 | `scripts/querydr.mjs` | Ask VNPAY what really happened to a transaction (API 2.1.0 `querydr`). Read-only; prints the one command that would finish the order |
+| `vitest.config.mts`, `vitest.setup.ts` | Vitest config: runs `lib/**/*.test.ts` in Node (`npm test`), resets mocks between tests; the setup file makes `fetch` throw so no test can reach the network |
+| `lib/vnpay.test.ts`, `lib/shipping.test.ts`, `lib/discount.test.ts`, `lib/sapo.test.ts`, `lib/order.test.ts` | Unit tests for the money path — see "Test". Mocks sit at the module edges (`./catalog`, `./locations`, `./discount` quote, `./sapo`, `./log`); signing is real, and the order store is the real in-memory one wrapped in a JSON round-trip so it behaves like Redis |
+| `.github/workflows/ci.yml` | CI on every pull request and push to `main`: `npm ci`, typecheck, lint, test, build, Node 24, no secrets |
 | `design/TOKENS.md` | Where every design token came from, with its source |
 | `docs/huong-dan-them-san-pham.md` | Shop-owner guide (Vietnamese, no CLI): add a Sapo product, then its Sanity content. Written for someone who is not a developer |
 
@@ -648,7 +652,11 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
 
 ## Test
 
-- `npm run typecheck`, `npm run lint`, `npm run build`.
+- **`npm test`** (Vitest 5.0.3, `vitest run`; needs Node ^22.12 or 24+, Vitest's own engine range, while the app itself still runs on ≥20.9), then `npm run typecheck`, `npm run lint`, `npm run build`.
+  Five files, all under `lib/`: `vnpay.test.ts` (GMT+7 dates, txnRef shape, amount ×100, 15-minute expiry, a **known-answer** HMAC-SHA512 over a hand-written sign string so the algorithm and the URL encoding are pinned, checksum verify incl. a one-đồng tamper and a wrong secret, success needs both codes), `shipping.test.ts` (flat 30,000₫, free at exactly 500,000₫ and not at 499,999₫), `discount.test.ts` (`evaluateRule`: rounding, cap, fixed amount never above goods, every refusal; `quoteDiscount`: `T` and `TEST100` refused although the fuzzy `?query=` matched TEST10, `test10` answered as `TEST10`), `sapo.test.ts` (`buildOrderPayload`: lines − discount + shipping equals the total, discount sent as `fixed_amount`, VNPAY order `paid` with one transaction for the total, COD order `pending` with no transaction) and `order.test.ts` (what `startCheckout` signs equals goods + delivery priced from the catalog and equals `quoteTotals`; browser-sent prices dropped; discounts-off refuses a code; refusals; `handleIpn` answering `97`/`01`/`04`/`00`/`02`/`99`, exactly one Sapo create, and only one of two simultaneous IPNs winning).
+  Verified 2026-10-06: 5 files, 61 tests pass. **Mutation checks, same day, each reverted:** +1₫ on the delivery fee failed 10 tests; +1₫ on goods per line failed 8; signing with SHA-256 instead of SHA-512 failed 11; deleting the `store.put` after the Sapo order is created failed 2 (the repeat-IPN and retry tests). That is the evidence the suite catches an amount one đồng off and a lost status, which typecheck, lint and build do not.
+  The tests mock the catalog, locations, the discount lookup, Sapo and the logger; the order store is the real in-memory one and the VNPAY signing is real. So they prove the arithmetic and the IPN state machine, **not** that Sapo or VNPAY accept what is sent — that still takes the live checks below.
+- **CI** (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every pull request and every push to `main`. It was **added 2026-10-06 and has not run on GitHub yet**, so its first result is still unverified.
 - CMS: `npm run studio:dev` for a local Studio, `npm run studio:deploy` to publish the hosted one. The **mandatory** CMS test is the degradation one — unset `SANITY_PROJECT_ID`, restart, and confirm a product page still serves price, stock and the add-to-cart form. A CMS that can take the storefront down is a bug, not a feature.
 - `npm run fetch:reference` re-downloads the UI reference. It reads the stylesheet hashes out of the fetched markup rather than hardcoding them, because they change on every deploy of the reference site and a hardcoded 404 would overwrite the CSS with an error page.
 - Revalidate webhook: `npm run check:revalidate` with the dev server running, or `npm run check:revalidate -- https://vnpay-sapo-poc.vercel.app` against production. All four cases must pass — two accepted with the right tag, two refused.
@@ -792,6 +800,7 @@ run**, so the response codes above are from the docs, not from this terminal.
   `docs/plan/T8-combo-ton-kho.md`. The storefront shows the correct availability; the order simply
   never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
+- **The unit tests cover `lib/vnpay.ts`, `lib/shipping.ts`, `lib/discount.ts` (`evaluateRule`) and `lib/order.ts` (checkout totals, quote, IPN) only.** Nothing tests `lib/sapo.ts` (the payload and the lookups), `lib/store.ts` against Redis, the route handlers, the UI or the scripts, so those rely on the live checks under "Test".
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - Sizes (T9) are one option at most in the URL, and each size is its own variant with its own stock — see "Variants (T9)" for what that does and does not cover. Max 10 per line, max 20 lines.
 

@@ -1,0 +1,39 @@
+# The gate for every pull request: the same four checks CLAUDE.md asks for before a commit.
+# Merging to main deploys production (Vercel), so this runs on the PR, before that can happen.
+# No secrets are needed: unit tests mock Sapo, and the build reads no env vars (every route is
+# force-dynamic), so a fork or a fresh clone runs exactly this.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A new push to a PR supersedes the old run; a run on main is never cancelled, so every
+  # production commit keeps its own result.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

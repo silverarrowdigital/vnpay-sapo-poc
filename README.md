@@ -5,7 +5,7 @@ Architecture, decisions and limitations: see [`CLAUDE.md`](./CLAUDE.md).
 
 ## Requirements
 
-- Node.js 20.9+ (22 LTS recommended)
+- Node.js 20.9+ to run the app; **22.12+ or 24** to run `npm test` (Vitest's requirement)
 - A VNPAY **sandbox** merchant account (TMN code + hash secret)
 - A Sapo store with a **Private App** that has **Orders: read & write**
 - A public HTTPS URL for the app (VNPAY must be able to call the IPN)
@@ -45,6 +45,7 @@ stock untracked.
 ## 2. Check & run
 
 ```bash
+npm test             # unit tests (Vitest): no network, no credentials needed
 npm run typecheck
 npm run lint
 npm run build
