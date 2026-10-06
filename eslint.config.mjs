@@ -16,5 +16,9 @@ export default defineConfig([
     "dist/**",
     // Downloaded UI reference, not code we run.
     "design/reference/**",
+    // Agent skills that a Marketplace install drops in (e.g. Upstash QStash): third-party code,
+    // and .claude/skills holds symlinks to it. Not this repo's code, not committed.
+    ".agents/**",
+    ".claude/skills/**",
   ]),
 ]);
