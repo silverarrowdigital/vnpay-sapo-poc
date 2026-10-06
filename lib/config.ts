@@ -192,6 +192,34 @@ export function getAppBaseUrl(): string | undefined {
   return base.replace(/\/+$/, "");
 }
 
+export interface AlertConfig {
+  apiKey: string;
+  /** Who is told. The shop owner's own address — never a customer's. */
+  to: string;
+  /**
+   * Sender. Defaults to Resend's shared test sender (`onboarding@resend.dev`), so that no sending
+   * domain has to be verified just to tell the owner something. **Unverified here:** that Resend
+   * delivers from that sender to an arbitrary recipient — it is widely described as limited to the
+   * address the Resend account was opened with, which is why `ALERT_EMAIL_TO` should be that
+   * address; Resend's send-email reference does not say either way. The display name is plain ASCII
+   * on purpose, so a rejected header cannot be the reason an alert silently fails.
+   */
+  from: string;
+}
+
+/**
+ * Where "money was taken but no order exists" is reported. `undefined` means alerts are off: the
+ * IPN still answers VNPAY as before, and the only signal left is the log line (which is what
+ * production had until T10). Off is a safe default, not a silent one — `lib/alert.ts` logs that it
+ * could not send.
+ */
+export function getAlertConfig(): AlertConfig | undefined {
+  const apiKey = read("RESEND_API_KEY");
+  const to = read("ALERT_EMAIL_TO");
+  if (apiKey === undefined || to === undefined || isPlaceholder(apiKey) || isPlaceholder(to)) return undefined;
+  return { apiKey, to, from: read("ALERT_EMAIL_FROM") ?? "Order alerts <onboarding@resend.dev>" };
+}
+
 /**
  * Shared secret for Sanity's content webhook, which tells us to drop cached content.
  *

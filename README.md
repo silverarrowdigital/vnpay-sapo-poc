@@ -85,6 +85,11 @@ build itself needs no environment variables and cannot fail on a missing secret.
    existing deployment.
 6. Point the VNPAY portal IPN URL at `<APP_BASE_URL>/api/vnpay/ipn` (step 4 below). The portal
    holds one IPN URL at a time, so switching between a local tunnel and Vercel means editing it.
+7. Optional, recommended: **order alerts.** Set `RESEND_API_KEY` and `ALERT_EMAIL_TO` and the shop
+   owner gets an email when a customer has paid and no order could be recorded. Without both,
+   nothing is sent. Not yet verified end to end (no mail sent so far), and Resend's shared sender is
+   believed to deliver only to the address the Resend account was opened with — see
+   [`.env.example`](./.env.example).
 
 **Checking that the store is really shared:** the result page distinguishes the two backends when
 it cannot find an order ("kept in memory" vs "the shared store"), and `checkout.created` logs
@@ -204,6 +209,9 @@ Deletion cannot be undone.
 | `04` | Amount mismatch |
 | `97` | Invalid checksum |
 | `99` | Sapo error / concurrent processing / server misconfiguration → VNPAY retries |
+
+A successful payment that ends in `01`, `04` or `99` (Sapo failed) also sends the owner an alert
+email, if alerts are configured; the email never changes the answer.
 
 ## Troubleshooting
 
