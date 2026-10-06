@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Manrope } from "next/font/google";
 import CartMenu from "@/components/CartMenu";
+import { formatVnd } from "@/lib/product";
+import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 import "./globals.css";
 
 /**
@@ -54,7 +56,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       {/* suppressHydrationWarning: browser extensions (e.g. ruttl) inject attributes on <body> before React hydrates */}
       <body suppressHydrationWarning className="bg-page font-body text-ink">
         <p className="bg-banner px-4 py-2 text-center text-[11px] tracking-wide text-page uppercase">
-          Freeship đơn từ 489k.
+          {/* Read from the same constant the delivery fee uses: this banner once said 489k while the
+              code charged below 500,000, a promise the checkout then broke. */}
+          Freeship đơn từ {formatVnd(FREE_SHIPPING_THRESHOLD_VND)}.
         </p>
 
         <header className="mx-auto flex w-full max-w-[1416px] flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 lg:py-6">

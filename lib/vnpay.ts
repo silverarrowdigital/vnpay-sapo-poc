@@ -13,7 +13,7 @@
  * - The IPN URL is NOT a request parameter; it is configured per terminal in the VNPAY
  *   merchant portal (sandbox: sandbox.vnpayment.vn/merchantv2).
  */
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { VnpayConfig } from "./config";
 
 export type VnpParams = Record<string, string>;
@@ -55,7 +55,10 @@ export function formatVnpDate(date: Date): string {
 
 /** Unique, alphanumeric reference (VNPAY: max 100 chars, must be unique per day). */
 export function createTxnRef(now = new Date()): string {
-  const rand = Math.floor(Math.random() * 1_000_000).toString().padStart(6, "0");
+  // randomInt, not Math.random: the reference is the only thing standing between a stranger and an
+  // order's page, so it should not come from a predictable generator. (Six digits is still only a
+  // million candidates per second — which is why /success no longer shows an address.)
+  const rand = randomInt(0, 1_000_000).toString().padStart(6, "0");
   return `${formatVnpDate(now)}${rand}`;
 }
 

@@ -29,9 +29,9 @@ export default async function CatalogPage() {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (
       <div className="card">
-        <h1>Catalog unavailable</h1>
+        <h1>Chưa tải được sản phẩm</h1>
         <p className="alert err">
-          Could not read products from Sapo. Check <code>SAPO_*</code> in <code>.env.local</code> and the server log.
+          Hệ thống đang tạm thời không đọc được danh sách sản phẩm. Vui lòng thử lại sau ít phút.
         </p>
       </div>
     );
@@ -40,11 +40,8 @@ export default async function CatalogPage() {
   if (products.length === 0) {
     return (
       <div className="card">
-        <h1>No products yet</h1>
-        <p className="alert warn">
-          Sapo returned no active product. Add one in Sapo admin, or check that its status is
-          <code> active</code>.
-        </p>
+        <h1>Chưa có sản phẩm</h1>
+        <p className="alert warn">Cửa hàng chưa có sản phẩm nào đang bán. Vui lòng quay lại sau.</p>
       </div>
     );
   }

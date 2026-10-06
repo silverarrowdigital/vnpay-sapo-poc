@@ -782,7 +782,7 @@ export type OrderLookupResult =
  * sidestepped by typing another.
  */
 export function phoneRateKey(phone: string): string {
-  return phone.replace(/D+/g, "").slice(-9);
+  return phone.replace(/\D+/g, "").slice(-9);
 }
 
 /** Compare the last 9 digits, so +84 / 84 / 0 prefixes of the same number match. */

@@ -34,6 +34,13 @@ const tmnCode = process.env.VNPAY_TMN_CODE;
 const hashSecret = process.env.VNPAY_HASH_SECRET;
 const endpoint = process.env.VNPAY_QUERYDR_URL ?? "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction";
 
+// A production payment URL with the default (sandbox) endpoint would query the wrong system and
+// answer "not found" for a real transaction. Refuse rather than look sandbox-correct.
+if (process.env.VNPAY_PAYMENT_URL && !process.env.VNPAY_QUERYDR_URL && !/\/\/sandbox\.vnpayment\.vn\//.test(process.env.VNPAY_PAYMENT_URL)) {
+  console.error("VNPAY_PAYMENT_URL không phải sandbox nhưng VNPAY_QUERYDR_URL chưa đặt: dừng lại để không hỏi nhầm hệ thống sandbox.");
+  process.exit(1);
+}
+
 if (!refArg) {
   console.error("Cách dùng: npm run querydr -- <txnRef> [transactionDate yyyyMMddHHmmss]");
   process.exit(1);

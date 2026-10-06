@@ -39,6 +39,13 @@ const [refArg, amountArg] = positional;
 const tmnCode = process.env.VNPAY_TMN_CODE;
 const hashSecret = process.env.VNPAY_HASH_SECRET;
 const endpoint = process.env.VNPAY_QUERYDR_URL ?? "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction";
+
+// A production payment URL with the default (sandbox) endpoint would aim a refund at the wrong
+// system. Refuse before anything is built, dry run included.
+if (process.env.VNPAY_PAYMENT_URL && !process.env.VNPAY_QUERYDR_URL && !/\/\/sandbox\.vnpayment\.vn\//.test(process.env.VNPAY_PAYMENT_URL)) {
+  console.error("VNPAY_PAYMENT_URL không phải sandbox nhưng VNPAY_QUERYDR_URL chưa đặt: dừng lại để không gửi hoàn tiền nhầm hệ thống.");
+  process.exit(1);
+}
 const createBy = process.env.VNPAY_REFUND_CREATE_BY ?? "shop-admin";
 
 const storeDomain = process.env.SAPO_STORE_DOMAIN;

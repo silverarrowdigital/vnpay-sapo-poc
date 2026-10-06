@@ -413,7 +413,7 @@ export function buildOrderPayload(cfg: SapoConfig, input: SapoOrderInput) {
       // recorded in the note, the note_attributes and the tags instead.
       ...(paid ? { transactions: [{ kind: "sale", status: "success", amount: input.totalVnd, gateway: "VNPAY" }] } : {}),
       note: paid
-        ? `Paid via VNPAY Sandbox. TxnRef ${input.txnRef}, VNPAY TransactionNo ${input.vnpTransactionNo ?? ""}.`
+        ? `Paid via VNPAY. TxnRef ${input.txnRef}, VNPAY TransactionNo ${input.vnpTransactionNo ?? ""}.`
         : `Thanh toán khi nhận hàng (COD). Mã đơn ${input.txnRef}. CHƯA thu tiền.`,
       note_attributes: [
         { name: "payment_method", value: input.method },

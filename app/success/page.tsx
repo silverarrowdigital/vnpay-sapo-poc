@@ -13,9 +13,9 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 /**
  * Restyled in T3.6. There is no reference design for this page, so it is built from the same
- * tokens and type as the copied ones. The "order not found" case names which store backend is in
- * use, because that one sentence is what distinguishes "this instance never saw the checkout" from
- * "the record expired".
+ * tokens and type as the copied ones. Outside production the "order not found" case also names
+ * which store backend is in use, because that one sentence is what distinguishes "this instance
+ * never saw the checkout" from "the record expired"; a customer never sees it.
  *
  * T7 added two things: a COD order is finished the moment it exists and must not be described as a
  * confirmed payment, and the money is now broken down (goods, discount, delivery) so the page
@@ -25,6 +25,16 @@ const TONE: Record<"ok" | "warn" | "err", string> = {
   ok: "border-primary text-[color:var(--ok)]",
   warn: "border-[color:var(--warn)] text-[color:var(--warn)]",
   err: "border-[color:var(--err)] text-[color:var(--err)]",
+};
+
+/** What the customer reads for each internal status. The raw value (`sapo_error`…) is not for them. */
+const STATUS_LABEL: Record<PendingOrder["status"], string> = {
+  pending: "Chờ thanh toán",
+  processing: "Đang xử lý",
+  completed: "Hoàn tất",
+  sapo_error: "Đang chờ ghi nhận đơn",
+  cancelled: "Đã huỷ",
+  failed: "Thất bại",
 };
 
 export default async function ResultPage({ searchParams }: { searchParams: SearchParams }) {
@@ -69,12 +79,12 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
   } else if (order?.status === "completed") {
     headline = "Đã xác nhận thanh toán — đơn hàng được tạo";
     tone = "ok";
-    detail = `VNPAY đã xác nhận thanh toán và đơn Sapo ${order.sapoOrder?.name ?? ""} đã được tạo.`;
+    detail = `VNPAY đã xác nhận thanh toán và đơn hàng ${order.sapoOrder?.name ?? ""} đã được tạo.`;
   } else if (order?.status === "sapo_error") {
     headline = "Đã nhận thanh toán — đang chờ đồng bộ đơn";
     tone = "warn";
     detail =
-      "Thanh toán đã được xác nhận, nhưng tạo đơn trong Sapo chưa thành công. Hệ thống sẽ tự thử lại khi VNPAY gửi lại thông báo.";
+      "Thanh toán đã được xác nhận, nhưng đơn hàng chưa được ghi nhận xong. Hệ thống sẽ tự thử lại; bạn không cần thanh toán lại. Việc này có thể mất vài phút đến vài chục phút: hãy tải lại trang sau ít phút, và nếu đơn vẫn chưa hoàn tất thì liên hệ cửa hàng kèm mã giao dịch bên dưới.";
   } else if (outcome === "cancelled" || order?.status === "cancelled") {
     headline = "Đã huỷ thanh toán";
     tone = "warn";
@@ -87,14 +97,20 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
     headline = "Đang chờ xác nhận thanh toán…";
     tone = "warn";
     detail =
-      "VNPAY báo thành công trên trình duyệt. Đơn hàng chỉ được tạo sau khi xác nhận server-to-server (IPN) của VNPAY về tới nơi.";
+      "VNPAY báo thành công. Đơn hàng được tạo ngay khi VNPAY xác nhận với hệ thống của chúng tôi; trang này sẽ tự cập nhật, bạn không cần tải lại.";
   } else {
     headline = "Không tìm thấy đơn hàng";
     tone = "err";
+    // The customer gets a plain message. Which store backend answered is a developer's question, so it
+    // is appended only outside production (it is what tells "this instance never saw the checkout"
+    // from "the record expired" while debugging).
     detail =
-      orderStoreKind() === "memory"
-        ? "Máy chủ này không có ghi nhận nào về giao dịch. Đơn đang lưu trong bộ nhớ, nên khởi động lại là mất và một instance khác sẽ không thấy. Hãy kiểm tra Sapo và log máy chủ."
-        : "Kho lưu dùng chung không có ghi nhận nào về giao dịch này, hoặc nó đã hết hạn. Hãy kiểm tra Sapo và log máy chủ.";
+      "Chưa tìm thấy giao dịch này. Nếu bạn đã thanh toán, đừng thanh toán lại: hãy liên hệ cửa hàng kèm mã giao dịch (nếu có) để được kiểm tra." +
+      (process.env.NODE_ENV === "production"
+        ? ""
+        : orderStoreKind() === "memory"
+          ? " [dev] Kho đang là bộ nhớ trong: khởi động lại hoặc instance khác sẽ không thấy đơn."
+          : " [dev] Kho dùng chung không có bản ghi này, hoặc nó đã hết hạn.");
   }
 
   return (
@@ -147,18 +163,12 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
             )}
             <dt className="text-ink-soft">{order.paymentMethod === "cod" ? "Thu khi nhận" : "Số tiền"}</dt>
             <dd className="m-0 font-mono">{formatVnd(order.amountVnd)}</dd>
-            {(order.customer.province ?? order.customer.district ?? order.customer.ward) !== undefined && (
-              <>
-                <dt className="text-ink-soft">Giao tới</dt>
-                <dd className="m-0">
-                  {[order.customer.address, order.customer.ward, order.customer.district, order.customer.province]
-                    .filter((part) => part !== undefined && part !== "")
-                    .join(", ")}
-                </dd>
-              </>
-            )}
+            {/* The delivery address is deliberately NOT shown here. This page is reached with only a
+                reference, which is a timestamp plus six digits — guessable — so showing where an order
+                is going would let anyone browse addresses. The lookup page asks for the phone number
+                as well, and shows it there. */}
             <dt className="text-ink-soft">Trạng thái</dt>
-            <dd className="m-0 font-mono">{order.status}</dd>
+            <dd className="m-0">{STATUS_LABEL[order.status] ?? order.status}</dd>
           </>
         )}
         {order?.vnpTransactionNo && (
@@ -169,7 +179,7 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
         )}
         {order?.sapoOrder && (
           <>
-            <dt className="text-ink-soft">Đơn Sapo</dt>
+            <dt className="text-ink-soft">Mã đơn</dt>
             <dd className="m-0 font-mono">{order.sapoOrder.name}</dd>
           </>
         )}
@@ -177,8 +187,8 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
 
       {order?.status === "completed" && txnRef && (
         <p className="mt-8 rounded-lg border border-line px-4 py-3 text-sm">
-          Lưu lại mã <strong className="font-mono">{txnRef}</strong> — cùng số điện thoại, nó là cách xem lại đơn này ở{" "}
-          <Link href={`/tra-cuu-don?txnRef=${encodeURIComponent(txnRef)}`}>trang tra cứu đơn hàng</Link>.
+          Lưu lại mã <strong className="font-mono">{txnRef}</strong> — cùng số điện thoại, nó là cách xem lại đơn này và
+          địa chỉ giao hàng ở <Link href={`/tra-cuu-don?txnRef=${encodeURIComponent(txnRef)}`}>trang tra cứu đơn hàng</Link>.
         </p>
       )}
 
