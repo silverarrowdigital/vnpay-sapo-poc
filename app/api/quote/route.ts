@@ -17,9 +17,10 @@ export const dynamic = "force-dynamic";
  * and signs the VNPAY URL with its own result, so what this returns can be tampered with freely
  * and changes nothing about what is charged.
  *
- * It does touch Sapo (catalog and price rules), so it is rate-limited under the `discount` policy:
- * this is the one place an anonymous caller can make us look up codes, and guessing codes is
- * exactly what that limit is for.
+ * It does touch Sapo (catalog and price rules), so it is rate-limited twice: every call under the
+ * generous `quote` policy (so it cannot be looped to exhaust Sapo's API bucket), and a call that
+ * tries a code under the tighter `discount` one — this is the one place an anonymous caller can
+ * make us look up codes, and guessing codes is exactly what that limit is for.
  */
 export async function POST(request: NextRequest) {
   let body: unknown;
@@ -50,8 +51,12 @@ export async function POST(request: NextRequest) {
   const provinceId = Number.isSafeInteger(provinceIdRaw) && provinceIdRaw > 0 ? provinceIdRaw : undefined;
   const discountCode = typeof b.discountCode === "string" ? b.discountCode : undefined;
 
-  // Only charge a rate-limit hit when a code is actually being tried; re-quoting delivery because
-  // the customer changed province is free and happens on every dropdown change.
+  if (await overRateLimit("quote", ip)) {
+    return NextResponse.json({ error: "Bạn thao tác quá nhanh. Vui lòng thử lại sau vài phút." }, { status: 429 });
+  }
+
+  // The tighter limit is charged only when a code is actually being tried; re-quoting delivery
+  // because the customer changed province happens on every dropdown change and costs nothing here.
   if (discountCode !== undefined && discountCode.trim() !== "" && (await overRateLimit("discount", ip))) {
     return NextResponse.json({ error: "Bạn thử mã quá nhiều lần. Vui lòng chờ ít phút." }, { status: 429 });
   }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MissingEnvError } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
-import { CheckoutError, overRateLimit, phoneRateKey, startCheckout, validateCheckout } from "@/lib/order";
+import { CheckoutError, overRateLimit, phoneRateKey, startCheckoutOnce, validateCheckout } from "@/lib/order";
 import { normaliseIp } from "@/lib/vnpay";
 
 export const runtime = "nodejs";
@@ -49,7 +49,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const started = await startCheckout(result.value, ip);
+    // The browser names one checkout attempt with a random key; the same key and the same form get the
+    // same payment URL back instead of a second pending order (T13.4).
+    const started = await startCheckoutOnce(result.value, ip, request.headers.get("idempotency-key") ?? undefined);
     if (started.method === "cod") {
       // Nothing to redirect to a gateway: the order already exists. The browser goes straight to
       // the result page, which reads the same stored record a VNPAY order would leave behind.

@@ -69,6 +69,23 @@ export function getVnpayConfig(): VnpayConfig {
   };
 }
 
+/** The sandbox `querydr` endpoint (API 2.1.0). */
+export const VNPAY_SANDBOX_QUERYDR_URL = "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction";
+
+/**
+ * Where to send `querydr`. `VNPAY_QUERYDR_URL` wins; otherwise the sandbox one — **but only while the
+ * payment URL is the sandbox's too**. A production payment URL beside the default endpoint would ask
+ * the wrong system and be told "no such transaction" about a real payment, so that combination
+ * returns `undefined` and callers do nothing (same guard as scripts/querydr.mjs).
+ */
+export function getQueryDrUrl(): string | undefined {
+  const explicit = read("VNPAY_QUERYDR_URL");
+  if (explicit !== undefined) return explicit;
+  const payment = read("VNPAY_PAYMENT_URL");
+  if (payment !== undefined && !/\/\/sandbox\.vnpayment\.vn\//.test(payment)) return undefined;
+  return VNPAY_SANDBOX_QUERYDR_URL;
+}
+
 export interface SapoConfig {
   /** e.g. "your-store.mysapo.net" — no protocol, no trailing slash */
   storeDomain: string;

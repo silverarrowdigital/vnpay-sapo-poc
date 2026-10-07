@@ -18,6 +18,7 @@ vi.mock("./log", () => ({
 }));
 vi.mock("./catalog", () => ({ getVariantIndex: vi.fn() }));
 vi.mock("./alert", () => ({ sendAlert: vi.fn(async () => true) }));
+vi.mock("./querydr", () => ({ queryVnpayTransaction: vi.fn() }));
 vi.mock("./locations", () => ({ resolveAddress: vi.fn() }));
 vi.mock("./discount", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discount")>()),
@@ -44,6 +45,10 @@ vi.mock("./store", async (importOriginal) => {
         release: (txnRef) => s.release(txnRef),
         hit: (key, windowSeconds) => s.hit(key, windowSeconds),
         count: (key) => s.count(key),
+        kvGet: (key) => s.kvGet(key),
+        kvSet: (key, value, ttl) => s.kvSet(key, value, ttl),
+        kvSetIfAbsent: (key, value, ttl) => s.kvSetIfAbsent(key, value, ttl),
+        kvDelete: (key) => s.kvDelete(key),
       };
     },
   };
@@ -54,7 +59,8 @@ const { resolveAddress } = await import("./locations");
 const { quoteDiscount } = await import("./discount");
 const { SapoApiError, createOrderOnce, fetchOrderDetailByRef } = await import("./sapo");
 const { sendAlert } = await import("./alert");
-const { CheckoutError, _resetStore, getOrder, handleIpn, lookupOrder, quoteTotals, startCheckout, validateCheckout } =
+const { queryVnpayTransaction } = await import("./querydr");
+const { CheckoutError, _resetStore, getOrder, handleIpn, lookupOrder, quoteTotals, reconcilePendingPayment, startCheckoutOnce, startCheckout, validateCheckout } =
   await import("./order");
 
 const SECRET = "TESTSECRETTESTSECRETTESTSECRET12";
@@ -413,3 +419,200 @@ describe("lookupOrder — reference plus phone, and nothing else", () => {
     expect(outcomes).toEqual(["found", "found", "found", "found", "found", "rate_limited"]);
   });
 });
+
+describe("reconcilePendingPayment — VNPAY took the money and never sent the IPN", () => {
+  const MINUTE = 60_000;
+
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"] }));
+  afterEach(() => vi.useRealTimers());
+
+  /** First sight of the order on the result page records the time and waits. */
+  async function firstSight(txnRef: string): Promise<void> {
+    expect(await reconcilePendingPayment(txnRef)).toBe("skipped");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+  }
+
+  async function pending(): Promise<{ txnRef: string; amountVnd: number }> {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    return { txnRef: started.txnRef, amountVnd: 378_000 };
+  }
+
+  /** What lib/querydr.ts hands back for a verified answer. */
+  function answer(txnRef: string, amountVnd: number, overrides: Record<string, string> = {}) {
+    return {
+      ok: true as const,
+      params: {
+        vnp_TmnCode: "TESTTMN1",
+        vnp_TxnRef: txnRef,
+        vnp_Amount: String(amountVnd * 100),
+        vnp_ResponseCode: "00",
+        vnp_TransactionStatus: "00",
+        vnp_TransactionNo: "15697481",
+        vnp_BankCode: "NCB",
+        vnp_PayDate: "20261007134156",
+        ...overrides,
+      },
+    };
+  }
+
+  it("creates the order once from VNPAY's answer, and the late IPN then gets 02", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(answer(txnRef, amountVnd));
+
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("settled");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createOrderOnce).mock.calls[0][1]).toMatchObject({ txnRef, totalVnd: amountVnd, method: "vnpay" });
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("02");
+    expect(await reconcilePendingPayment(txnRef)).toBe("skipped");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask during the first minute after the browser came back, even for an old checkout", async () => {
+    const { txnRef } = await pending();
+    vi.advanceTimersByTime(20 * MINUTE); // the customer spent twenty minutes on VNPAY's pages
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(30_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("skipped");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+  });
+
+  it("also retries an order a settle left in sapo_error, since no IPN is coming to do it", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(answer(txnRef, amountVnd));
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("no_answer"); // Sapo failed: 99
+    expect((await getOrder(txnRef))?.status).toBe("sapo_error");
+
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("settled"); // the next minute retries
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+
+  it("asks at most once a minute for one reference", async () => {
+    const { txnRef } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("no_answer");
+    expect(await reconcilePendingPayment(txnRef)).toBe("throttled");
+    expect(queryVnpayTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates nothing when VNPAY says the payment did not succeed", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(answer(txnRef, amountVnd, { vnp_TransactionStatus: "02" }));
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("not_paid");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await getOrder(txnRef))?.status).toBe("pending");
+  });
+
+  it("creates nothing when the amount VNPAY reports is not the amount we asked for", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(answer(txnRef, amountVnd - 1));
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("no_answer");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect(sendAlert).toHaveBeenCalledWith("amount_mismatch", txnRef, expect.anything());
+  });
+
+  it("creates nothing when VNPAY cannot be reached", async () => {
+    const { txnRef } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+    await firstSight(txnRef);
+    vi.advanceTimersByTime(61_000);
+    expect(await reconcilePendingPayment(txnRef)).toBe("no_answer");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+  });
+
+  it("leaves alone a reference it never issued, an order past two hours, and one already finished", async () => {
+    expect(await reconcilePendingPayment("20200101000000ABCDEFGHJKMNPQRST")).toBe("skipped");
+    const { txnRef, amountVnd } = await pending();
+    expect(await reconcilePendingPayment(txnRef, Date.now() + 3 * 60 * MINUTE)).toBe("skipped"); // older than two hours
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    vi.advanceTimersByTime(2 * MINUTE);
+    expect(await reconcilePendingPayment(txnRef)).toBe("skipped");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("startCheckoutOnce — one request, one order (T13.4)", () => {
+  const KEY = "0123456789abcdef0123456789abcdef";
+  const cart = () => input([{ variantId: 1001, quantity: 1 }]);
+
+  it("returns the same payment URL for a repeat of the same form, and creates one pending order", async () => {
+    catalog(product(1001, 348_000, 68));
+    const first = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    const again = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    expect(again).toEqual(first);
+    expect(getVariantIndexCalls()).toBe(1); // the second call never priced anything
+  });
+
+  it("starts a new checkout when the same key arrives with a different cart", async () => {
+    catalog(product(1001, 348_000, 68));
+    const first = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    const changed = await startCheckoutOnce(input([{ variantId: 1001, quantity: 2 }]), "1.2.3.4", KEY);
+    expect(changed.txnRef).not.toBe(first.txnRef);
+    expect(signedAmount((changed as { paymentUrl: string }).paymentUrl)).not.toBe(signedAmount((first as { paymentUrl: string }).paymentUrl));
+  });
+
+  it("treats a missing or malformed key as no key at all", async () => {
+    catalog(product(1001, 348_000, 68));
+    const a = await startCheckoutOnce(cart(), "1.2.3.4", undefined);
+    const b = await startCheckoutOnce(cart(), "1.2.3.4", "short");
+    expect(a.txnRef).not.toBe(b.txnRef);
+  });
+
+  it("lets the loser of two simultaneous submits wait instead of creating a second order", async () => {
+    catalog(product(1001, 348_000, 68));
+    const results = await Promise.allSettled([startCheckoutOnce(cart(), "1.2.3.4", KEY), startCheckoutOnce(cart(), "1.2.3.4", KEY)]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(ok).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect(refused[0].reason).toBeInstanceOf(CheckoutError);
+    expect((refused[0].reason as InstanceType<typeof CheckoutError>).status).toBe(409);
+  });
+
+  it("forgets the key when the first attempt is refused, so the corrected form can be resubmitted", async () => {
+    catalog(product(1001, 348_000, 0)); // sold out → 409
+    await expect(startCheckoutOnce(cart(), "1.2.3.4", KEY)).rejects.toBeInstanceOf(CheckoutError);
+    catalog(product(1001, 348_000, 68));
+    const ok = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    expect(ok.method).toBe("vnpay");
+  });
+
+  it("does not replay after two minutes: a slow retry is a new checkout", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      catalog(product(1001, 348_000, 68));
+      const first = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+      vi.advanceTimersByTime(3 * 60 * 1000);
+      const later = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+      expect(later.txnRef).not.toBe(first.txnRef);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay a payment URL for an order that is no longer pending", async () => {
+    catalog(product(1001, 348_000, 68));
+    const first = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    expect((await handleIpn(ipn(first.txnRef, 378_000))).RspCode).toBe("00"); // paid
+    const again = await startCheckoutOnce(cart(), "1.2.3.4", KEY);
+    expect(again.txnRef).not.toBe(first.txnRef);
+  });
+});
+
+function getVariantIndexCalls(): number {
+  return vi.mocked(getVariantIndex).mock.calls.length;
+}

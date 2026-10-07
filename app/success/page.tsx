@@ -2,7 +2,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import AutoRefresh from "@/components/AutoRefresh";
 import ClearCartOnSuccess from "@/components/ClearCartOnSuccess";
-import { getOrder, orderStoreKind, overRateLimit, type PendingOrder } from "@/lib/order";
+import { getOrder, orderStoreKind, overRateLimit, isReconcilable, reconcilePendingPayment, type PendingOrder } from "@/lib/order";
 import { formatVnd } from "@/lib/product";
 import { describeResponseCode, normaliseIp } from "@/lib/vnpay";
 
@@ -44,7 +44,9 @@ const STATUS_LABEL: Record<PendingOrder["status"], string> = {
 
 export default async function ResultPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
-  const outcome = one(sp.outcome); // from /api/vnpay/return, checksum already verified server-side
+  // From /api/vnpay/return, which verified the checksum before redirecting — but this URL itself is not
+  // signed, so anyone can type `outcome=success`. It is a reason to ask VNPAY, never a proof of payment.
+  const outcome = one(sp.outcome);
   const txnRef = one(sp.txnRef);
   const code = one(sp.code);
 
@@ -58,7 +60,7 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
     if (await overRateLimit("result", ip)) return <RateLimited />;
   }
 
-  // Server-side order state is authoritative (set only by the IPN).
+  // Server-side order state is authoritative (set only from a signed VNPAY answer: the IPN, or the querydr below).
   let order: PendingOrder | undefined;
   let storeUnavailable = false;
   if (txnRef) {
@@ -68,6 +70,18 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
       // A store outage must not be reported as "no such order": the payment may well have gone
       // through, and the IPN will retry. Details stay in the server log.
       storeUnavailable = true;
+    }
+  }
+  // The IPN is the usual way a paid order gets recorded. When the browser is back from a verified
+  // successful payment, the order is still pending and the IPN has not come, ask VNPAY itself (T13.0).
+  // The URL only gives the reason to ask; VNPAY's signed answer is what settles it.
+  if (outcome === "success" && txnRef && order && isReconcilable(order.status)) {
+    if ((await reconcilePendingPayment(txnRef)) === "settled") {
+      try {
+        order = await getOrder(txnRef);
+      } catch {
+        storeUnavailable = true;
+      }
     }
   }
   const waiting = outcome === "success" && (!order || order.status === "pending" || order.status === "processing");

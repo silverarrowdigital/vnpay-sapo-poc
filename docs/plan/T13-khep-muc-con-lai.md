@@ -1,6 +1,8 @@
 # T13 — Xử lý các mục còn mở trong doc tiến độ (kế hoạch ngày 2026-10-07)
 
-**Trạng thái (2026-10-07, cập nhật 14:00): CHỈ MỚI LÀ KẾ HOẠCH. Chưa có dòng code nào.** Chờ bạn trả lời mục "Cần bạn
+**Trạng thái (2026-10-07): T13.0, .2–.6, .8, .9 đã làm xong trong working tree, CHƯA commit, CHƯA deploy; .7 đã quyết định không đổi; .1, .10–.13 còn chờ.** Chủ shop đã chốt cả 6 câu "theo khuyến nghị". Xem mục "Kết quả" ở cuối file. (Phần bên dưới là kế hoạch gốc lúc 14:00, giữ nguyên.)
+
+~~Trạng thái cũ: chỉ mới là kế hoạch.~~ Chờ bạn trả lời mục "Cần bạn
 chốt" (nói "theo khuyến nghị" là đủ) và nói "bắt đầu T13".
 
 **Thêm lúc 14:00: T13.0 lên đầu danh sách**, sau sự cố đơn #1039 (xem ngay dưới).
@@ -100,4 +102,37 @@ chứng chạy thật, kèm comment commit + cách kiểm. **Push = deploy produ
    không phải bằng chứng. Phương án khác: không đổi quy tắc, chỉ gửi email cảnh báo khi `querydr` thấy đã thu tiền mà chưa có
    đơn — an toàn hơn về nguyên tắc nhưng vẫn để khách chờ tới khi có người xử lý tay.
 
-**Cổng: không viết code cho tới khi bạn trả lời 6 câu trên (hoặc nói "theo khuyến nghị") và nói "bắt đầu T13".**
+**Cổng: không viết code cho tới khi bạn trả lời 6 câu trên (hoặc nói "theo khuyến nghị") và nói "bắt đầu T13".** (Cổng đã qua: bạn chốt cả 6 câu theo khuyến nghị.)
+
+## Kết quả (2026-10-07)
+
+### Quyết định đã chốt (cả 6 câu: "theo khuyến nghị")
+
+1. JSON-LD: cho **một** ngoại lệ `dangerouslySetInnerHTML` (`components/JsonLd.tsx`), chỉ dữ liệu Sapo, thoát `<`, `>`, `&`, U+2028/2029. Quy tắc bảo mật 8 trong `CLAUDE.md` đã sửa.
+2. IPN **không** giới hạn tốc độ (đã có chữ ký; chặn nhầm một lần VNPAY gửi lại là mất đơn đã thu tiền).
+3. Ba lần trả tiền thử (T13.1) và 4. đóng một đơn thử để kiểm T13.2: đã đồng ý, **chưa làm** (cần deploy, và đóng đơn làm tay trong trang quản trị Sapo).
+5. Công cụ đo lường: chưa làm.
+6. Quy tắc bảo mật 2 viết lại: "đã thanh toán" chỉ do câu trả lời máy-chủ-tới-máy-chủ có chữ ký của VNPAY (IPN hoặc `querydr`) quyết định, đã kiểm chữ ký, terminal, mã đơn, số tiền và `vnp_TransactionType` = 01; không bao giờ do URL trình duyệt. `/success?outcome=success` chỉ là lý do để hỏi.
+
+### Đã làm, trong working tree (chưa commit, chưa deploy)
+
+- **T13.0** `reconcilePendingPayment` (`lib/order.ts`) + `lib/querydr.ts`. Trang `/success` hỏi VNPAY khi đơn (đang chờ/đang xử lý/lỗi Sapo, không phải COD, dưới 2 giờ) đã chờ 60 giây tính từ lúc trang hỏi LẦN ĐẦU, tối đa một lần/phút cho mỗi mã đơn. Câu trả lời phải qua kiểm chữ ký (đã đối chiếu với một câu trả lời sandbox thật: HMAC-SHA512 của ta trùng `vnp_SecureHash`), đúng terminal và mã đơn, loại 01, `00`/`00`; rồi đi qua `settlePayment` (phần thân cũ của `handleIpn`, dùng chung với IPN). Timeout 6 giây. **Giới hạn:** chỉ chạy khi có người mở `/success`; khách đóng tab trước thì chưa được cứu cho tới khi có job định kỳ (QStash, PR 7). **Chưa kiểm trên production:** chưa có khoản thanh toán thật nào đi qua đường mới.
+- **T13.2** `findOrderByTxnRef` và `fetchOrderDetailByRef` hỏi Sapo cả `open`, `closed`, `cancelled` song song, và "đóng cửa khi lỗi" (một lần hỏi lỗi mà không khớp đơn nào thì báo lỗi, không trả "không có đơn"). Đo chỉ-đọc 2026-10-07: `status=closed` và `status=cancelled` trả 200 với 0 đơn (store có 22 đơn mở, chưa có đơn đã đóng/hủy), nên tham số được chấp nhận chứ không bị bỏ qua; `status=any` vẫn trả 0. **Chưa kiểm:** tìm thấy một đơn thực sự đã đóng/hủy (chưa có đơn nào; việc đóng cần endpoint chưa có trong tài liệu Sapo đã đọc, nên phải làm tay trong trang quản trị). Chi phí: 3 lượt gọi Sapo cho mỗi lần tìm, 6 cho mỗi lần tra cứu đơn; hạn mức của Sapo là 40 (`x-sapo-api-call-limit: 1/40`).
+- **T13.3** Test đơn vị: POST tạo đơn mất phản hồi, lần thử lại tìm thấy theo tag và không tạo lần hai (chỉ dùng mock, chưa chạy trên Sapo thật).
+- **T13.4** `startCheckoutOnce`: header `Idempotency-Key` (ngẫu nhiên mỗi lần mở trang, do `CheckoutForm` gửi). Cùng khoá và cùng nội dung form trong 2 phút, đơn còn chờ → trả lại đúng URL thanh toán cũ. Form khác cùng khoá → checkout mới. Lỗi thì nhả khoá. Hai lần bấm đồng thời → lần sau nhận 409. Lưu qua `kvGet/kvSet/kvSetIfAbsent/kvDelete` (Redis, tiền tố `vnpay-sapo:kv:`, sống 15 phút, khoá 60 giây).
+- **T13.5** Bản ghi đơn chờ sống 7 ngày thay vì 24 giờ. Bản ghi đã nằm sẵn trong Redis vẫn giữ 24 giờ cho tới lần ghi kế tiếp.
+- **T13.6** Giới hạn `quote`: 120 lần / 10 phút / IP cho mọi lần gọi `/api/quote`, tính trước khi gọi Sapo; giới hạn `discount` cho việc thử mã vẫn giữ. IPN không giới hạn (quyết định 2).
+- **T13.7 KHÔNG đổi, có chủ ý:** `remoteIp`/`userAgent` trong log IPN là của server VNPAY, không phải dữ liệu khách, và hữu ích khi điều tra.
+- **T13.8** Trang tra cứu đơn có dòng "Giao hàng" cho đơn đang mở: `null` → "Chưa giao hàng"; `fulfilled`/`partial` → nhãn tương ứng (tên theo Shopify, **chưa xác minh với Sapo**: cả 22 đơn đều là `null`); giá trị khác thì ẩn. Không có mã vận đơn (không thấy trong phản hồi nào).
+- **T13.9** JSON-LD sản phẩm (`lib/jsonld.ts`, `components/JsonLd.tsx`): một mức giá → `Offer`; các size khác giá → `AggregateOffer` (thấp/cao/số lượng). `url` chỉ có khi đã đặt `APP_BASE_URL`. **Chưa thử bằng Rich Results Test của Google.**
+
+### Kiểm tra
+
+- 10 file test, 129 test đạt; `typecheck`, `lint`, `build` đạt. `reviewer` không thấy lỗi nghiêm trọng sau hai vòng, các mục nên sửa đã sửa.
+- Thử "cố ý làm sai thì đỏ" cho các chốt của reconcile: bỏ kiểm terminal/mã đơn, và bỏ thời gian chờ, đều làm test đỏ.
+
+### Chưa làm
+
+- **T13.1** ba lần trả tiền thử (một đơn production với code mới, một lần hủy ở VNPAY, một lần hoàn tiền) — cần deploy và bạn nhập thẻ test.
+- **T13.10** kiểm layout 390px, **T13.11** đo Core Web Vitals, **T13.13** kế hoạch Postgres (T14).
+- Chưa có điều gì ở T13.0 được kiểm trên production.

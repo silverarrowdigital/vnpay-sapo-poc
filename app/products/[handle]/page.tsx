@@ -4,7 +4,10 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import AddToCartForm from "@/components/AddToCartForm";
 import BlockRenderer from "@/components/blocks/BlockRenderer";
+import JsonLd from "@/components/JsonLd";
 import { getProductByHandle } from "@/lib/catalog";
+import { getAppBaseUrl } from "@/lib/config";
+import { productJsonLd } from "@/lib/jsonld";
 import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
 import { OPEN_GRAPH } from "@/lib/business";
@@ -156,6 +159,15 @@ export default async function ProductDetailPage({
 
   return (
     <div className="mx-auto w-full max-w-[1416px] px-4 lg:px-10">
+      {/* Search-engine data (T13.9): Sapo's own name, price and stock, never CMS content. */}
+      <JsonLd
+        data={productJsonLd(group, {
+          // schema.org wants an absolute address; without APP_BASE_URL the field is left out.
+          url: getAppBaseUrl() ? `${getAppBaseUrl()}${productHref(defaultVariant(group))}` : undefined,
+          imageUrl: product.imageUrl,
+          description: product.description,
+        })}
+      />
       <nav aria-label="Breadcrumb" className="py-4 text-xs">
         <ol className="m-0 flex list-none flex-wrap gap-1 p-0">
           <li>

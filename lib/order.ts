@@ -6,6 +6,7 @@
  * That module also owns the cross-instance claim this file relies on to keep two concurrent IPNs
  * from both creating a Sapo order. Sapo's own lookup in `createOrderOnce` is the second guard.
  */
+import { createHash } from "node:crypto";
 import { sendAlert, type AlertDetails, type AlertKind } from "./alert";
 import { getDiscountsEnabled, getSapoConfig, getVnpayConfig } from "./config";
 import { DiscountRejected, quoteDiscount, normaliseCode, type DiscountQuote } from "./discount";
@@ -32,6 +33,7 @@ import {
   type SapoOrderInput,
   type SapoOrderRef,
 } from "./sapo";
+import { queryVnpayTransaction } from "./querydr";
 import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder, type PendingOrderLine } from "./store";
 import {
   CANCELLED_RESPONSE_CODE,
@@ -219,6 +221,96 @@ export class CheckoutError extends Error {
 export type CheckoutStarted =
   | { method: "vnpay"; txnRef: string; paymentUrl: string }
   | { method: "cod"; txnRef: string; sapoOrder: SapoOrderRef };
+
+// ---------------------------------------------------------------------------
+// One checkout request, one order (T13.4)
+// ---------------------------------------------------------------------------
+
+/** How long a started checkout is remembered. */
+const IDEMPOTENCY_TTL_SECONDS = 15 * 60;
+/**
+ * How long after it was created a checkout may be replayed. Short on purpose: what this catches is a
+ * double click or a retry over a bad connection, which happen within seconds. A longer window would
+ * hand a payment URL back to someone who has, in the meantime, already paid on it (an order stays
+ * `pending` until its IPN arrives) or whose VNPAY link is about to expire (it lives 15 minutes).
+ */
+const IDEMPOTENCY_REPLAY_WINDOW_MS = 2 * 60 * 1000;
+/** A request in flight is remembered only briefly: long enough for Sapo and Redis, short enough to forget a crash. */
+const IDEMPOTENCY_LOCK_SECONDS = 60;
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+
+/** Everything about the order that the customer chose. A different form is a different request. */
+function checkoutFingerprint(input: CheckoutInput): string {
+  const canonical = JSON.stringify({
+    m: input.paymentMethod,
+    n: input.name,
+    p: input.phone,
+    e: input.email,
+    a: input.address,
+    prov: input.provinceId,
+    d: input.districtId,
+    w: input.wardId,
+    c: input.discountCode === undefined ? "" : normaliseCode(input.discountCode),
+    l: [...input.lines].sort((x, y) => x.variantId - y.variantId).map((l) => [l.variantId, l.quantity]),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * `startCheckout`, but a browser that sends the same `Idempotency-Key` with the same form twice gets
+ * **the same payment URL** instead of a second pending order — a double click, a retry after a flaky
+ * connection, the back button then "pay" again. Without a key (or with an invalid one) this is
+ * exactly `startCheckout`.
+ *
+ * Bound to the form, not just the key: the same key with a different cart or address starts a new
+ * checkout, so a stale key can never hand out a URL for an order the customer has since changed.
+ * A replay is only honoured within two minutes of the first request and while that order is still
+ * `pending`. Two simultaneous submits:
+ * the loser is told to wait a moment (409) rather than creating a second order. The key is forgotten
+ * if the first attempt fails, so a refused checkout can be corrected and resubmitted with it.
+ *
+ * Nothing here touches money: the replayed URL is the one already signed for the first request.
+ */
+export async function startCheckoutOnce(input: CheckoutInput, ipAddr: string, key?: string): Promise<CheckoutStarted> {
+  if (key === undefined || !IDEMPOTENCY_KEY_PATTERN.test(key)) return startCheckout(input, ipAddr);
+
+  const store = getOrderStore();
+  const k = `idem:${key}`;
+  const fp = checkoutFingerprint(input);
+
+  const raw = await store.kvGet(k);
+  if (raw !== undefined) {
+    let seen: { state?: string; fp?: string; started?: CheckoutStarted } = {};
+    try {
+      seen = JSON.parse(raw) as typeof seen;
+    } catch {
+      // An unreadable entry is treated as absent: starting a new checkout is the safe reading.
+    }
+    if (seen.state === "pending") {
+      throw new CheckoutError("Đơn hàng đang được xử lý, vui lòng chờ vài giây.", 409);
+    }
+    if (seen.state === "done" && seen.fp === fp && seen.started !== undefined) {
+      const earlier = await store.get(seen.started.txnRef);
+      const young = earlier !== undefined && Date.now() - Date.parse(earlier.createdAt) < IDEMPOTENCY_REPLAY_WINDOW_MS;
+      if (earlier !== undefined && earlier.status === "pending" && young) {
+        log.info("checkout.replayed", { txnRef: seen.started.txnRef });
+        return seen.started;
+      }
+    }
+    await store.kvSet(k, JSON.stringify({ state: "pending" }), IDEMPOTENCY_LOCK_SECONDS);
+  } else if (!(await store.kvSetIfAbsent(k, JSON.stringify({ state: "pending" }), IDEMPOTENCY_LOCK_SECONDS))) {
+    throw new CheckoutError("Đơn hàng đang được xử lý, vui lòng chờ vài giây.", 409);
+  }
+
+  try {
+    const started = await startCheckout(input, ipAddr);
+    await store.kvSet(k, JSON.stringify({ state: "done", fp, started }), IDEMPOTENCY_TTL_SECONDS);
+    return started;
+  } catch (err) {
+    await store.kvDelete(k).catch(() => undefined);
+    throw err;
+  }
+}
 
 /** The three money lines of an order, each computed on the server. */
 export interface OrderTotals {
@@ -550,7 +642,18 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     return { RspCode: "97", Message: "Invalid signature" };
   }
   log.info("ipn.checksum_verified", { txnRef: params.vnp_TxnRef });
+  return settlePayment(params);
+}
 
+/**
+ * The rest of the IPN: order exists → amount matches → not already confirmed → apply the result.
+ * Split from `handleIpn` so that a verified `querydr` answer (T13.0, `reconcilePendingPayment`) runs
+ * through **exactly** this code — same amount check, same cross-instance claim, same Sapo duplicate
+ * guard — instead of a second, slightly different way to create an order.
+ *
+ * The caller must already have verified the signature of whatever `params` came from.
+ */
+async function settlePayment(params: VnpParams): Promise<IpnResponse> {
   const txnRef = params.vnp_TxnRef ?? "";
   const store = getOrderStore();
 
@@ -719,6 +822,81 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
 }
 
 // ---------------------------------------------------------------------------
+// A payment whose IPN never came (T13.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long after the browser *first came back* an order waits for its IPN before we go and ask. An
+ * IPN usually lands in 5–13 s. Counted from the first return, not from checkout: a customer can spend
+ * minutes on VNPAY's card and OTP pages, so checkout time says nothing about how long the IPN has had.
+ */
+export const QUERYDR_AFTER_SECONDS = 60;
+/** Past this the order is no longer worth asking about from a page view. */
+const QUERYDR_UNTIL_MS = 2 * 60 * 60 * 1000;
+/** What an order may be in for us to ask. Never "completed", "cancelled" or "failed". */
+const RECONCILABLE: readonly OrderStatus[] = ["pending", "processing", "sapo_error"];
+
+export function isReconcilable(status: OrderStatus): boolean {
+  return RECONCILABLE.includes(status);
+}
+
+export type ReconcileOutcome = "skipped" | "throttled" | "no_answer" | "not_paid" | "settled";
+
+/**
+ * Ask VNPAY itself whether a still-pending VNPAY order was paid, and settle it if so.
+ *
+ * Called by the result page when the browser came back from VNPAY with a verified "paid" return and
+ * the IPN has not arrived. **The browser's return is only the reason to ask**: it decides nothing.
+ * The decision is VNPAY's own signed answer (`lib/querydr.ts`), accepted only for our terminal and
+ * this reference, with `vnp_ResponseCode` and `vnp_TransactionStatus` both `00`, and then passed to
+ * `settlePayment` — which still checks the amount and still refuses a second Sapo order. So if the
+ * IPN arrives a second later it gets `02`, and if this runs twice the second one does nothing.
+ *
+ * Asked at most once a minute per reference, never within the first minute after the browser first
+ * came back (the IPN is usually faster), and not at all for COD, for a finished order, or for one
+ * older than two hours. An order left in `sapo_error` or `processing` is asked about too: with no IPN
+ * there is nothing else to retry it, and `settlePayment` is idempotent. Never throws: it is called
+ * while rendering a page.
+ */
+export async function reconcilePendingPayment(txnRef: string, now: number = Date.now()): Promise<ReconcileOutcome> {
+  try {
+    if (!TXN_REF_PATTERN.test(txnRef)) return "skipped";
+    const store = getOrderStore();
+    const order = await store.get(txnRef);
+    if (!order || order.paymentMethod === "cod" || !isReconcilable(order.status)) return "skipped";
+    const age = now - Date.parse(order.createdAt);
+    if (age > QUERYDR_UNTIL_MS) return "skipped";
+
+    // Wait QUERYDR_AFTER_SECONDS from the first time this is asked. A hit counter's window starts at
+    // its first hit and the key vanishes when it ends, so: "seen" lives 60 s; "known" outlives it.
+    // First sight (neither exists) records both and waits; while "seen" lives it waits; once it has
+    // gone but "known" has not, the minute has passed and it may ask.
+    if ((await store.count(`querydr-known:${txnRef}`)) === 0) {
+      await store.hit(`querydr-seen:${txnRef}`, QUERYDR_AFTER_SECONDS);
+      await store.hit(`querydr-known:${txnRef}`, QUERYDR_UNTIL_MS / 1000);
+      return "skipped";
+    }
+    if ((await store.count(`querydr-seen:${txnRef}`)) > 0) return "skipped";
+
+    if ((await store.hit(`querydr:${txnRef}`, 60)) > 1) return "throttled";
+
+    const answer = await queryVnpayTransaction(txnRef);
+    if (!answer.ok) return "no_answer";
+    if (!isPaymentSuccess(answer.params)) {
+      log.info("querydr.not_paid", { txnRef, transactionStatus: answer.params.vnp_TransactionStatus });
+      return "not_paid";
+    }
+    log.warn("querydr.paid_without_ipn", { txnRef, ageSeconds: Math.round(age / 1000) });
+    const res = await settlePayment(answer.params);
+    log.info("querydr.settled", { txnRef, rspCode: res.RspCode });
+    return res.RspCode === "00" || res.RspCode === "02" ? "settled" : "no_answer";
+  } catch (err) {
+    log.error("querydr.unexpected_error", { txnRef, error: errorMessage(err) });
+    return "no_answer";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Return URL: display only, never changes order state
 // ---------------------------------------------------------------------------
 
@@ -766,6 +944,13 @@ export interface RatePolicy {
 export const RATE_POLICIES = {
   checkout: { limit: 10, windowSeconds: 600 },
   discount: { limit: 20, windowSeconds: 600 },
+  /**
+   * Every quote, with or without a code (T13.6). A quote reads the live catalog from Sapo, and Sapo's
+   * API has a 40-call bucket (`x-sapo-api-call-limit`, measured 2026-10-07), so an anonymous loop on
+   * /api/quote could starve checkout of its own Sapo calls. Generous because the checkout page quotes
+   * on every address or cart change: 120 in 10 minutes is far above what a person produces.
+   */
+  quote: { limit: 120, windowSeconds: 600 },
   lookup: { limit: 10, windowSeconds: 900 },
   /**
    * The order lookup, per phone number (T11) — the axis an IP limit misses, since IPs rotate. Counted

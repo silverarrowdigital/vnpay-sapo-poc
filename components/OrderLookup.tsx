@@ -26,6 +26,17 @@ const FINANCIAL_LABEL: Record<string, string> = {
   voided: "Đã huỷ thanh toán",
 };
 
+/**
+ * Delivery state (T13.8). Only the two values below are drawn; any other string Sapo sends is left
+ * out rather than shown raw to a customer. **Unverified:** all 22 orders on this store had
+ * `fulfillment_status: null` when read on 2026-10-07, so "fulfilled" and "partial" are Shopify's
+ * names, assumed to be Sapo's. No tracking number is shown: none has been seen in a response.
+ */
+const FULFILLMENT_LABEL: Record<string, string> = {
+  fulfilled: "Đã giao cho đơn vị vận chuyển",
+  partial: "Đã giao một phần",
+};
+
 const STATUS_LABEL: Record<string, string> = {
   open: "Đang xử lý",
   closed: "Đã hoàn tất",
@@ -158,6 +169,14 @@ export default function OrderLookup({ initialRef = "" }: { initialRef?: string }
             </dd>
             <dt className="text-ink-soft">Trạng thái đơn</dt>
             <dd className="m-0">{STATUS_LABEL[order.status ?? ""] ?? order.status ?? "—"}</dd>
+            {order.status === "open" && (order.fulfillmentStatus == null || order.fulfillmentStatus in FULFILLMENT_LABEL) && (
+              <>
+                <dt className="text-ink-soft">Giao hàng</dt>
+                <dd className="m-0">
+                  {order.fulfillmentStatus == null ? "Chưa giao hàng" : FULFILLMENT_LABEL[order.fulfillmentStatus]}
+                </dd>
+              </>
+            )}
             {order.address !== undefined && (
               <>
                 <dt className="text-ink-soft">Giao tới</dt>

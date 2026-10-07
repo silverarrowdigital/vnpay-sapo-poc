@@ -98,8 +98,14 @@ export interface PendingOrder {
   lastError?: string;
 }
 
-/** A pending order outlives the 15-minute VNPAY payment window by a wide margin. */
-const ORDER_TTL_SECONDS = 24 * 60 * 60;
+/**
+ * A pending order outlives the 15-minute VNPAY payment window by a wide margin: seven days (T13.5;
+ * it was 24 hours). The long tail is for the IPN that arrives late or has to be recovered by hand —
+ * VNPAY itself retries for under an hour, but a reference the shop owner reconciles the next day
+ * should still find its record rather than answer `01` for money already taken. Redis refreshes it on
+ * every write; the cost is a few kilobytes per order for a week.
+ */
+const ORDER_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Long enough for the slowest `createOrderOnce` (a Sapo lookup plus a create, 15 s each), short
@@ -110,6 +116,7 @@ const CLAIM_TTL_SECONDS = 120;
 const ORDER_KEY = "vnpay-sapo:order:";
 const CLAIM_KEY = "vnpay-sapo:claim:";
 const RATE_KEY = "vnpay-sapo:rate:";
+const KV_KEY = "vnpay-sapo:kv:";
 
 /**
  * Key namespace, inserted after the fixed prefix.
@@ -175,6 +182,15 @@ export interface OrderStore {
    * silence an incident for an hour.
    */
   count(key: string): Promise<number>;
+  /**
+   * A short string kept under `key` for `ttlSeconds` (T13.4: "this checkout request already
+   * produced that payment URL"). `kvSetIfAbsent` is atomic — exactly one concurrent caller gets
+   * `true` — and is what makes two simultaneous submits of one form into one order.
+   */
+  kvGet(key: string): Promise<string | undefined>;
+  kvSet(key: string, value: string, ttlSeconds: number): Promise<void>;
+  kvSetIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+  kvDelete(key: string): Promise<void>;
 }
 
 /**
@@ -263,14 +279,17 @@ interface MemoryState {
   claims: Map<string, number>;
   /** rate-limit key → running count and when the window ends. */
   hits: Map<string, { count: number; expiresAt: number }>;
+  /** kv key → value and when it expires. */
+  kv: Map<string, { value: string; expiresAt: number }>;
 }
 
 /** Kept on globalThis so `next dev`'s module reloads do not drop live orders. */
 const g = globalThis as typeof globalThis & { __vnpaySapoStore?: MemoryState };
-const memoryState: MemoryState = (g.__vnpaySapoStore ??= { orders: new Map(), claims: new Map(), hits: new Map() });
+const memoryState: MemoryState = (g.__vnpaySapoStore ??= { orders: new Map(), claims: new Map(), hits: new Map(), kv: new Map() });
 // A process that was running before `hits` existed keeps its state object, so make sure the new
 // map is there rather than trusting the `??=` above to have built it.
 memoryState.hits ??= new Map();
+memoryState.kv ??= new Map();
 
 class MemoryOrderStore implements OrderStore {
   readonly kind = "memory" as const;
@@ -281,6 +300,7 @@ class MemoryOrderStore implements OrderStore {
     for (const [k, v] of memoryState.orders) if (Date.parse(v.createdAt) < cutoff) memoryState.orders.delete(k);
     for (const [k, expiresAt] of memoryState.claims) if (expiresAt <= now) memoryState.claims.delete(k);
     for (const [k, h] of memoryState.hits) if (h.expiresAt <= now) memoryState.hits.delete(k);
+    for (const [k, v] of memoryState.kv) if (v.expiresAt <= now) memoryState.kv.delete(k);
   }
 
   async get(txnRef: string): Promise<PendingOrder | undefined> {
@@ -323,6 +343,27 @@ class MemoryOrderStore implements OrderStore {
     const current = memoryState.hits.get(key);
     return current !== undefined && current.expiresAt > Date.now() ? current.count : 0;
   }
+
+  async kvGet(key: string): Promise<string | undefined> {
+    const v = memoryState.kv.get(key);
+    return v !== undefined && v.expiresAt > Date.now() ? v.value : undefined;
+  }
+
+  async kvSet(key: string, value: string, ttlSeconds: number): Promise<void> {
+    memoryState.kv.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  }
+
+  async kvSetIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    // No await between the check and the write: that gap is what makes a test-and-set atomic here.
+    const current = memoryState.kv.get(key);
+    if (current !== undefined && current.expiresAt > Date.now()) return false;
+    memoryState.kv.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+    return true;
+  }
+
+  async kvDelete(key: string): Promise<void> {
+    memoryState.kv.delete(key);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +392,7 @@ class RedisOrderStore implements OrderStore {
   }
 
   async put(order: PendingOrder): Promise<void> {
-    // Refreshes the TTL on every write, so an order stays readable for 24 h after its last change.
+    // Refreshes the TTL on every write, so an order stays readable for 7 days after its last change.
     await this.redis.set(this.orderKey(order.txnRef), order, { ex: ORDER_TTL_SECONDS });
   }
 
@@ -384,6 +425,23 @@ class RedisOrderStore implements OrderStore {
   async count(key: string): Promise<number> {
     const n = await this.redis.get<number>(RATE_KEY + this.namespace + key);
     return typeof n === "number" ? n : Number(n ?? 0) || 0;
+  }
+
+  async kvGet(key: string): Promise<string | undefined> {
+    const v = await this.redis.get<unknown>(KV_KEY + this.namespace + key);
+    return typeof v === "string" ? v : v === null || v === undefined ? undefined : JSON.stringify(v);
+  }
+
+  async kvSet(key: string, value: string, ttlSeconds: number): Promise<void> {
+    await this.redis.set(KV_KEY + this.namespace + key, value, { ex: ttlSeconds });
+  }
+
+  async kvSetIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    return (await this.redis.set(KV_KEY + this.namespace + key, value, { nx: true, ex: ttlSeconds })) === "OK";
+  }
+
+  async kvDelete(key: string): Promise<void> {
+    await this.redis.del(KV_KEY + this.namespace + key);
   }
 }
 
@@ -431,5 +489,6 @@ export function _resetStore(): void {
   memoryState.orders.clear();
   memoryState.claims.clear();
   memoryState.hits.clear();
+  memoryState.kv.clear();
   cached = undefined;
 }

@@ -480,9 +480,12 @@ export async function findOrderByTxnRef(
   // the whole tag exactly (a prefix of the tag returns nothing). The plural "tags" is silently
   // ignored and returns every order, so it must not be used here.
   //
-  // No "status" filter either: Shopify's "status=any" is not valid on Sapo and matches nothing
-  // (HTTP 200 with an empty list), which silently disabled this whole guard. Sapo's default
-  // listing covers open orders — what a VNPAY IPN retry (within ~50 min) is looking for.
+  // **Never `status=any`**: it is not valid on Sapo and matches nothing (HTTP 200 with an empty
+  // list), which silently disabled this whole guard once. The default listing covers *open* orders
+  // only, so an order the shop had already closed or cancelled before an IPN retry arrived was
+  // invisible here and a second paid order could be created for the same payment (T13.2). So each
+  // status Sapo documents — open, closed, cancelled — is asked for explicitly, in parallel
+  // (`fetchOrdersByTag`).
   //
   // created_on_min and the exact re-check below stay as a fallback: on a store that ignored
   // "tag" we would get a plain recent-orders list and still match correctly, just less cheaply.
@@ -493,9 +496,40 @@ export async function findOrderByTxnRef(
     created_on_min: createdMin,
     fields: "id,name,tags,note_attributes",
   });
-  const data = (await sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`)) as { orders?: OrderListItem[] };
-  const match = (data.orders ?? []).find((o) => matchesRef(o, txnRef, tag));
+  const orders = await fetchOrdersByTag<OrderListItem>(cfg, qs, (o) => matchesRef(o, txnRef, tag));
+  const match = orders.find((o) => matchesRef(o, txnRef, tag));
   return match ? { id: match.id, name: match.name ?? `#${match.id}` } : null;
+}
+
+/** The three order states Sapo documents for `GET /admin/orders.json?status=`. `any` is not one of them. */
+const ORDER_STATUSES = ["open", "closed", "cancelled"] as const;
+
+/**
+ * Orders carrying a tag, whatever their state: one request per status, in parallel.
+ *
+ * **Fails closed.** If any of the three requests failed and no order matched in the others, this
+ * throws instead of answering "none": the caller uses the answer to decide whether it may create an
+ * order, and "I could not look in the closed ones" is not "there is no such order". A request that
+ * failed while another already found the order is harmless — the order is found.
+ */
+async function fetchOrdersByTag<T>(
+  cfg: SapoConfig,
+  baseQuery: URLSearchParams,
+  isMatch: (o: T) => boolean,
+): Promise<T[]> {
+  const settled = await Promise.allSettled(
+    ORDER_STATUSES.map((status) => {
+      const qs = new URLSearchParams(baseQuery);
+      qs.set("status", status);
+      return sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`) as Promise<{ orders?: T[] }>;
+    }),
+  );
+  const orders = settled.flatMap((r) => (r.status === "fulfilled" ? (r.value.orders ?? []) : []));
+  if (!orders.some(isMatch)) {
+    const failure = settled.find((r) => r.status === "rejected");
+    if (failure !== undefined) throw (failure as PromiseRejectedResult).reason;
+  }
+  return orders;
 }
 
 /**
@@ -612,11 +646,12 @@ export async function fetchOrderDetailByRef(cfg: SapoConfig, txnRef: string): Pr
   // a timing oracle on top of the one `lookupOrder` is careful to close — it would let a caller
   // tell "no such order" from "wrong phone number" by the clock rather than by the message. Doing
   // both every time makes the cost the same whatever the outcome, and is faster for a COD order.
+  // Each tag is looked up in every order state (T13.2), so a closed or cancelled order is still found.
   const settled = await Promise.allSettled(
     methods.map((method) => {
       const tag = txnTag(txnRef, method);
       const qs = new URLSearchParams({ tag, limit: "50", fields: "id,name,tags,note_attributes" });
-      return sapoFetch(cfg, `/admin/orders.json?${qs.toString()}`) as Promise<{ orders?: OrderDetailRow[] }>;
+      return fetchOrdersByTag<OrderDetailRow>(cfg, qs, (o) => matchesRef(o, txnRef, tag)).then((orders) => ({ orders }));
     }),
   );
 

@@ -53,7 +53,7 @@ const SUBJECTS: Record<AlertKind, string> = {
 
 const MEANING: Record<AlertKind, string> = {
   paid_no_order:
-    "VNPAY báo thanh toán thành công cho một mã mà cửa hàng không có bản ghi. Có thể bản ghi đã hết hạn (24 giờ), hoặc khách thanh toán từ một bản thử/preview trong khi cổng VNPAY gửi thông báo về bản chính. Tiền đã thu, chưa có đơn.",
+    "VNPAY báo thanh toán thành công cho một mã mà cửa hàng không có bản ghi. Có thể bản ghi đã hết hạn (7 ngày), hoặc khách thanh toán từ một bản thử/preview trong khi cổng VNPAY gửi thông báo về bản chính. Tiền đã thu, chưa có đơn.",
   amount_mismatch:
     "VNPAY báo thanh toán thành công nhưng số tiền khác số tiền của đơn. Hệ thống đã từ chối xác nhận, nên đơn chưa được tạo.",
   sapo_failed:

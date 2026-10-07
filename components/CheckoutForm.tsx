@@ -102,6 +102,9 @@ export default function CheckoutForm({
   // quantity steppers fire several times while a customer holds the button down and each quote is
   // a Sapo read.
   const quoteSeq = useRef(0);
+  // One random key per page load (T13.4): a double click or a retry sends the same key with the same
+  // form, and the server answers with the same payment URL instead of opening a second pending order.
+  const idempotencyKey = useRef("");
   const refreshQuote = useCallback(
     async (code: string | undefined) => {
       if (address.provinceId === undefined) {
@@ -178,10 +181,11 @@ export default function CheckoutForm({
     setErrors({});
     setFormError(null);
     const data = new FormData(e.currentTarget);
+    if (idempotencyKey.current === "") idempotencyKey.current = crypto.randomUUID().replaceAll("-", "");
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey.current },
         body: JSON.stringify({
           name: data.get("name"),
           phone: data.get("phone"),
