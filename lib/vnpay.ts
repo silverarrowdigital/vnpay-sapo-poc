@@ -53,13 +53,38 @@ export function formatVnpDate(date: Date): string {
   );
 }
 
-/** Unique, alphanumeric reference (VNPAY: max 100 chars, must be unique per day). */
+/**
+ * Alphabet of the random part of a reference: digits and upper-case letters without the four that
+ * read alike (I, L, O, U), 32 symbols, so each character carries exactly 5 bits.
+ */
+const TXN_REF_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const TXN_REF_RANDOM_LENGTH = 16;
+
+/**
+ * Unique, alphanumeric reference (VNPAY: max 100 chars, must be unique per day): the GMT+7
+ * timestamp, then 16 random symbols — 80 bits.
+ *
+ * randomInt, not Math.random: the reference is what a stranger would have to guess to reach an
+ * order. It used to be six digits (a million candidates per timestamp second, T11); 80 bits makes
+ * walking references hopeless whatever the rate limit does.
+ */
 export function createTxnRef(now = new Date()): string {
-  // randomInt, not Math.random: the reference is the only thing standing between a stranger and an
-  // order's page, so it should not come from a predictable generator. (Six digits is still only a
-  // million candidates per second — which is why /success no longer shows an address.)
-  const rand = randomInt(0, 1_000_000).toString().padStart(6, "0");
+  let rand = "";
+  for (let i = 0; i < TXN_REF_RANDOM_LENGTH; i++) rand += TXN_REF_ALPHABET[randomInt(0, TXN_REF_ALPHABET.length)];
   return `${formatVnpDate(now)}${rand}`;
+}
+
+/**
+ * Exactly the two shapes we ever issued: the old 20 digits (still in Sapo tags and in customers'
+ * hands) and the new 14 digits plus 16 symbols. Anything looser would let junk spend a phone number's
+ * lookup tries (`lookupPhone`) and let a one-character typo do the same to a customer. Upper-case only; `normaliseTxnRef` folds a typed
+ * reference into it first.
+ */
+export const TXN_REF_PATTERN = /^(?:[0-9]{20}|[0-9]{14}[0-9A-HJKMNP-TV-Z]{16})$/;
+
+/** What a customer typed → the form we store: trimmed, upper-cased. Digit-only references are unchanged. */
+export function normaliseTxnRef(raw: string): string {
+  return raw.trim().toUpperCase();
 }
 
 /** VNPAY requires an IP string of 7–45 chars; fall back to a safe value when unknown. */

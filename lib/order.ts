@@ -37,6 +37,8 @@ import {
   CANCELLED_RESPONSE_CODE,
   createPaymentUrl,
   createTxnRef,
+  normaliseTxnRef,
+  TXN_REF_PATTERN,
   isPaymentSuccess,
   verifySignature,
   type IpnResponse,
@@ -305,8 +307,8 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
 
   const store = getOrderStore();
 
-  // A txnRef is a GMT+7 timestamp plus 6 random digits, so a collision needs two checkouts in the
-  // same second that also drew the same digits; a handful of retries is more than enough.
+  // A txnRef is a GMT+7 timestamp plus 16 random symbols (80 bits), so a collision is not a real
+  // possibility; the check and the retries are belt and braces.
   let txnRef = createTxnRef();
   for (let attempt = 0; attempt < 5 && (await store.has(txnRef)); attempt++) txnRef = createTxnRef();
 
@@ -766,6 +768,13 @@ export const RATE_POLICIES = {
   discount: { limit: 20, windowSeconds: 600 },
   lookup: { limit: 10, windowSeconds: 900 },
   /**
+   * The order lookup, per phone number (T11) — the axis an IP limit misses, since IPs rotate. Counted
+   * only for a well-formed reference, so typing junk costs nobody anything. The price is that someone
+   * who knows a victim's number can spend that number's five tries an hour; the lookup is not how a
+   * customer is told anything urgent, and the alternative is no cap on a rotating attacker.
+   */
+  lookupPhone: { limit: 5, windowSeconds: 3600 },
+  /**
    * COD, per IP — tighter than `checkout` because the two paths are not symmetric: card spam costs
    * the spammer money before it costs the shop anything, while a COD request creates a real order
    * and moves real stock for free.
@@ -789,8 +798,8 @@ export const RATE_POLICIES = {
    * minutes is never reached by one customer waiting on one order. It was reached in about six
    * minutes when the page polled every 3 s for ever — change one of these and check the other.
    * The window is per IP and shared by every reference, so customers behind one mobile NAT address
-   * share it too. A million candidate references per second of checkout time still makes a sweep
-   * hopeless at this rate.
+   * share it too. Since T11 a reference carries 80 random bits (it was a million candidates per
+   * timestamp second), so a sweep is hopeless whatever this number is.
    */
   result: { limit: 120, windowSeconds: 600 },
 } as const satisfies Record<string, RatePolicy>;
@@ -850,14 +859,16 @@ function samePhone(a: string, b: string): boolean {
  * The phone number is the whole access check, so two things are deliberate. A wrong phone answers
  * exactly like a reference that does not exist — otherwise the page becomes an oracle for which
  * references are real — and the attempt is counted against the caller's IP whether it succeeded or
- * not, so the pair cannot be brute-forced. A reference is a timestamp plus six digits, which is
- * guessable given enough tries; this is what makes "enough tries" not happen.
+ * not, so the pair cannot be brute-forced. A reference is a timestamp plus 16 random
+ * symbols (T11; before that six digits, guessable) — the rate limits are the second line, not the first.
  */
 export async function lookupOrder(txnRef: string, phone: string, ip: string): Promise<OrderLookupResult> {
   if (await overRateLimit("lookup", ip)) return { outcome: "rate_limited" };
 
-  const ref = txnRef.trim();
-  if (!/^[0-9]{6,40}$/.test(ref)) return { outcome: "not_found" };
+  const ref = normaliseTxnRef(txnRef);
+  if (!TXN_REF_PATTERN.test(ref)) return { outcome: "not_found" };
+  const phoneKey = phoneRateKey(phone);
+  if (phoneKey.length === 9 && (await overRateLimit("lookupPhone", phoneKey))) return { outcome: "rate_limited" };
 
   const detail = await fetchOrderDetailByRef(getSapoConfig(), ref);
   if (detail === null) {

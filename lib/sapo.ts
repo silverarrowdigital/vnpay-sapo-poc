@@ -506,7 +506,9 @@ export async function findOrderByTxnRef(
  * created before COD existed carries that one and nothing else.
  */
 function matchesRef(o: OrderListItem, txnRef: string, tag: string): boolean {
-  if ((o.tags ?? "").split(",").map((t) => t.trim()).includes(tag)) return true;
+  // Case-insensitive: references now carry capitals (T11) and it is not known whether Sapo keeps a tag's case.
+  const want = tag.toLowerCase();
+  if ((o.tags ?? "").split(",").some((t) => t.trim().toLowerCase() === want)) return true;
   return (o.note_attributes ?? []).some(
     (a) => (a.name === "order_ref" || a.name === "vnp_TxnRef") && a.value === txnRef,
   );

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import OrderLookup from "@/components/OrderLookup";
+import { TXN_REF_PATTERN, normaliseTxnRef } from "@/lib/vnpay";
 
 export const dynamic = "force-dynamic"; // an order's status must never be served from a cache
 
@@ -22,7 +23,7 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 export default async function OrderLookupPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const raw = Array.isArray(sp.txnRef) ? sp.txnRef[0] : sp.txnRef;
-  const initialRef = typeof raw === "string" && /^[0-9]{6,40}$/.test(raw) ? raw : "";
+  const initialRef = typeof raw === "string" && TXN_REF_PATTERN.test(normaliseTxnRef(raw)) ? normaliseTxnRef(raw) : "";
 
   return (
     <div className="mx-auto w-full max-w-[720px] px-4 py-16">

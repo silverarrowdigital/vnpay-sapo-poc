@@ -90,9 +90,11 @@ export default function OrderLookup({ initialRef = "" }: { initialRef?: string }
             value={txnRef}
             onChange={(e) => setTxnRef(e.target.value)}
             required
-            inputMode="numeric"
-            maxLength={40}
-            placeholder="Dãy số trên trang xác nhận đơn"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            maxLength={30}
+            placeholder="Mã trên trang xác nhận đơn"
             className={FIELD_CLASS}
           />
         </div>

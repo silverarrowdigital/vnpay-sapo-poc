@@ -1,3 +1,13 @@
+
+## Theo dõi tiến độ
+Danh sách việc nằm ở doc Claude Docs: https://claude.ai/code/artifact/410013e4-40c1-4e53-b708-f0abe046b6bb
+Đọc doc này khi bắt đầu một việc mới để biết ưu tiên. Sau khi xong một việc khớp với một mục trong doc:
+- Chỉ tick mục đó khi đã chạy được và có bằng chứng (test pass, đơn sandbox thật, log). Code xong mà chưa kiểm chứng thì chưa tick.
+- Mỗi lần tick, để lại một comment ngắn trên mục đó: commit hash và cách đã kiểm chứng.
+- Không xoá hay viết lại mục người khác đã sửa; việc mới thì thêm mục mới ở đúng phần.
+- Mục trong phần "Cần xác minh trong code" phải có kết luận rõ (đúng/sai, file nào) trong comment trước khi tick.
+
+
 # CLAUDE.md — VNPAY → Sapo headless checkout PoC
 
 Source of truth for future work on this repo. Read it before changing anything.
@@ -241,9 +251,10 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
 6. No customer data in URLs; the result page URL carries only txnRef, outcome, response code. The
    order-lookup page accepts a prefilled reference in its query string but **never** the phone
    number, so a shared link is not a shared address book. **The result page (`/success`) shows no
-   delivery address either** (changed 2026-10-06, T10): it opens with only a reference, which is a
-   GMT+7 timestamp plus six digits (now from `crypto.randomInt`, but still only ~10^6 guesses per
-   second of timestamp), and it has **no rate limit**. The address appears only on the phone-gated
+   delivery address either** (changed 2026-10-06, T10): it opens with only a reference, and it has **no rate limit**. Since T11
+   (2026-10-07) a new reference is a GMT+7 timestamp plus 16 random symbols (80 bits), so it is no longer
+   guessable; references issued before that (timestamp + six digits, ~10^6 guesses per second of
+   timestamp) still exist and are still accepted. The address appears only on the phone-gated
    order lookup. Do not add it back to `/success`.
 7. Never invent API endpoints. Anything new must be checked against the official docs listed below.
 8. **No CMS content is ever rendered as HTML.** `htmlToText` already strips Sapo's description; Sanity rich text goes through Portable Text into our own React elements (`components/blocks/RichText.tsx`). No `dangerouslySetInnerHTML` anywhere.
@@ -254,8 +265,10 @@ A value copied unchanged from `.env.example` counts as **not configured**: `lib/
     and recomputes the money before signing anything. Accepting an amount from the browser would be
     a gift to anyone who can open DevTools.
 12. **The order lookup is rate-limited and answers failures identically.** A reference is a
-    timestamp plus six digits — guessable with enough tries — so the phone-number check is backed by
-    a counter in the shared store, and "wrong phone" is indistinguishable from "no such order".
+    timestamp plus 16 random symbols (80 bits, T11); old ones were timestamp plus six digits, which
+    is guessable with enough tries and is why the phone check is backed by two counters in the shared
+    store (`lookup` 10 per 15 min per IP, `lookupPhone` 5 per hour per phone). "Wrong phone" is
+    indistinguishable from "no such order", and a malformed reference is refused before it costs a try.
 
 ## VNPAY flow (API 2.1.0) — verified docs
 
@@ -289,7 +302,7 @@ Two traps, both hit for real:
 With all three fields right the flow is fully automatic: verified live, `vnp_PayDate 20260930132702`
 (GMT+7) and Sapo order `#1015` created at `06:27:10Z` — **8 seconds** after the payment, with no
 replay, and a repeated IPN answering `02` while stock stayed put.
-- txnRef: `yyyyMMddHHmmss` (GMT+7) + 6 random digits.
+- txnRef (`createTxnRef`, `lib/vnpay.ts`): `yyyyMMddHHmmss` (GMT+7) + 16 random symbols from a 32-symbol alphabet (digits and capitals without I, L, O, U) = 30 chars, 80 bits (T11, 2026-10-07). It was + 6 random digits (20 chars). `TXN_REF_PATTERN` accepts exactly the old 20 digits or the new shape; `normaliseTxnRef` trims and upper-cases what a customer typed. VNPAY's payment page rendered for a 30-char reference (checked 2026-10-07; that reference was not paid through the card page).
 - Sandbox test card (NCB): `9704198526191432198`, `NGUYEN VAN A`, issue `07/15`, OTP `123456`.
 
 ## Sapo flow — verified docs
@@ -683,7 +696,8 @@ Only the in-memory pending orders are lost on restart, so finish a checkout in t
 ## Test
 
 - **`npm test`** (Vitest 5.0.3, `vitest run`; needs Node ^22.12 or 24+, Vitest's own engine range, while the app itself still runs on ≥20.9), then `npm run typecheck`, `npm run lint`, `npm run build`.
-  Five files, all under `lib/`: `vnpay.test.ts` (GMT+7 dates, txnRef shape, amount ×100, 15-minute expiry, a **known-answer** HMAC-SHA512 over a hand-written sign string so the algorithm and the URL encoding are pinned, checksum verify incl. a one-đồng tamper and a wrong secret, success needs both codes), `shipping.test.ts` (flat 30,000₫, free at exactly 500,000₫ and not at 499,999₫), `discount.test.ts` (`evaluateRule`: rounding, cap, fixed amount never above goods, every refusal; `quoteDiscount`: `T` and `TEST100` refused although the fuzzy `?query=` matched TEST10, `test10` answered as `TEST10`), `sapo.test.ts` (`buildOrderPayload`: lines − discount + shipping equals the total, discount sent as `fixed_amount`, VNPAY order `paid` with one transaction for the total, COD order `pending` with no transaction) and `order.test.ts` (what `startCheckout` signs equals goods + delivery priced from the catalog and equals `quoteTotals`; browser-sent prices dropped; discounts-off refuses a code; refusals; `handleIpn` answering `97`/`01`/`04`/`00`/`02`/`99`, exactly one Sapo create, and only one of two simultaneous IPNs winning).
+  Six files, all under `lib/` (the list below predates `alert.test.ts`, described under "Order alerts"): `vnpay.test.ts` (GMT+7 dates, txnRef shape and uniqueness over 10,000 draws, `TXN_REF_PATTERN`, `normaliseTxnRef`, amount ×100, 15-minute expiry, a **known-answer** HMAC-SHA512 over a hand-written sign string so the algorithm and the URL encoding are pinned, checksum verify incl. a one-đồng tamper and a wrong secret, success needs both codes), `shipping.test.ts` (flat 30,000₫, free at exactly 500,000₫ and not at 499,999₫), `discount.test.ts` (`evaluateRule`: rounding, cap, fixed amount never above goods, every refusal; `quoteDiscount`: `T` and `TEST100` refused although the fuzzy `?query=` matched TEST10, `test10` answered as `TEST10`), `sapo.test.ts` (`buildOrderPayload`: lines − discount + shipping equals the total, discount sent as `fixed_amount`, VNPAY order `paid` with one transaction for the total, COD order `pending` with no transaction) and `order.test.ts` (what `startCheckout` signs equals goods + delivery priced from the catalog and equals `quoteTotals`; browser-sent prices dropped; discounts-off refuses a code; refusals; `handleIpn` answering `97`/`01`/`04`/`00`/`02`/`99`, exactly one Sapo create, and only one of two simultaneous IPNs winning).
+  `order.test.ts` also covers `lookupOrder` since T11: lower-case reference, wrong phone == missing order, a malformed reference costs no try, 5 per hour per phone across IPs. **Verified 2026-10-07: 6 files, 81 tests pass** (75 before T11); typecheck, lint, build pass. No mutation check of the T11 tests has been run.
   Verified 2026-10-06: 5 files, 61 tests pass. **Mutation checks, same day, each reverted:** +1₫ on the delivery fee failed 10 tests; +1₫ on goods per line failed 8; signing with SHA-256 instead of SHA-512 failed 11; deleting the `store.put` after the Sapo order is created failed 2 (the repeat-IPN and retry tests). That is the evidence the suite catches an amount one đồng off and a lost status, which typecheck, lint and build do not.
   The tests mock the catalog, locations, the discount lookup, Sapo and the logger; the order store is the real in-memory one and the VNPAY signing is real. So they prove the arithmetic and the IPN state machine, **not** that Sapo or VNPAY accept what is sent — that still takes the live checks below.
 - **CI** (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every pull request and every push to `main`. It was **added 2026-10-06 and has not run on GitHub yet**, so its first result is still unverified.
@@ -831,11 +845,13 @@ run**, so the response codes above are from the docs, not from this terminal.
   `docs/plan/T8-combo-ton-kho.md`. The storefront shows the correct availability; the order simply
   never deducts it. This is an active book-keeping error, not a future risk.
 - **A double-submitted COD checkout makes two orders**, because each submit draws its own reference. The button disables on submit and the rate limit bounds the damage, but there is no idempotency key from the browser.
-- **The unit tests cover `lib/vnpay.ts`, `lib/shipping.ts`, `lib/discount.ts` (`evaluateRule`), `lib/order.ts` (checkout totals, quote, IPN) and `lib/alert.ts` (dedupe, no-throw, mail content, with `fetch` mocked) only.** Nothing tests `lib/sapo.ts` (the payload and the lookups), `lib/store.ts` against Redis, the route handlers, the UI or the scripts, so those rely on the live checks under "Test".
+- **The unit tests cover `lib/vnpay.ts`, `lib/shipping.ts`, `lib/discount.ts` (`evaluateRule`), `lib/order.ts` (checkout totals, quote, IPN, order lookup) and `lib/alert.ts` (dedupe, no-throw, mail content, with `fetch` mocked) only.** Nothing tests `lib/sapo.ts` (the payload and the lookups), `lib/store.ts` against Redis, the route handlers, the UI or the scripts, so those rely on the live checks under "Test".
 - Rate limiting is per IP in the shared store and **fails open**: a store outage lets requests through rather than stopping the shop from selling.
 - Sizes (T9) are one option at most in the URL, and each size is its own variant with its own stock — see "Variants (T9)" for what that does and does not cover. Max 10 per line, max 20 lines.
 - **The consent checkbox at checkout is a UI gate, not a record.** `#agree-policies` in `components/CheckoutForm.tsx` (required, links to the four policies) keeps the pay button disabled until ticked. It is **not sent to the server and not stored**, so it is not proof that a customer agreed, and a direct `POST /api/checkout` ignores it. Verified in a browser 2026-10-06: with a complete address the button is disabled until ticked and disabled again when unticked; the request body and the money path are unchanged. If proof of consent is ever needed, it has to travel with the request and be stored with the order.
 - **Policy text (`lib/policies.ts`) is the shop owner's old text, patched only where it was false for this shop, and nobody qualified has reviewed it.** Patched (2026-10-06): payment is VNPAY only, with the COD sentence following `COD_ENABLED`; the delivery fee and free-delivery line are computed from `lib/shipping.ts` across one province per zone (a range if the zones ever differ); no customer accounts; the order-lookup page is mentioned; Zalo replaced by Facebook/email. Money is written with `formatVnd` (`₫500,000`). **Left as the owner wrote it, and flagged in the file header:** delivery times and carriers, a Covid mention, the old domain `thehourtea.com`, a 2-year data-retention promise (**nothing in this code implements it**), and a returns text that says there are no refunds beside a promise to refund an order that never arrived, and that excludes discounted goods from exchange. Treat these pages as a draft for the owner and a lawyer to read, not as settled terms.
+- **The order lookup's phone counter can be used to lock a customer out (T11, accepted).** `lookupPhone` allows 5 tries per hour per phone (keyed by the last 9 digits), counted only for a well-formed reference. Someone who knows a victim's number and can produce any reference-shaped string can spend that number's 5 tries and block the real customer's lookup for an hour. Accepted because the alternative (no per-phone limit) lets a rotating-IP attacker guess; the order itself is not exposed.
+- **Whether Sapo keeps a tag's letter case is NOT known (T11).** New references contain capitals and customers may type lower case, so `matchesRef` (`lib/sapo.ts`) compares the `vnpay-<ref>` tag case-insensitively, and the lookup upper-cases input first. Not verified: the stored case of the tag, an old-format reference through the new lookup against live Sapo (unit-tested only), and the Sapo-side duplicate guard on a repeat IPN (the repeat answered `02` from the stored status). Seen 2026-10-07: the first lookup seconds after an order was created answered not-found and the same lookup a few seconds later found it (Sapo tag index delay, cause not investigated).
 - **`/lien-he` has no form** on purpose: no inbox has been chosen to receive one, and a form that goes nowhere is worse than none.
 
 ## Next steps (not in MVP)

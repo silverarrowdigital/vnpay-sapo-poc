@@ -20,6 +20,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 8 | **T7** — Từ bản chạy được thành cửa hàng bán thật | [T7-ban-hang-that.md](T7-ban-hang-that.md) | ⬅️ **Tiếp theo** — chặn ở **T7.0** (bật quyền Private App) |
 | 9 | **T9** — Chọn biến thể (size) cho sản phẩm | [T9-bien-the-san-pham.md](T9-bien-the-san-pham.md) | ✅ Xong và **đã deploy** (commit `ed0ffa9`, 2026-10-06). Đã kiểm bằng đơn VNPAY sandbox thật. Còn mở: giỏ hai size, size hết hàng cạnh size còn hàng |
 | 10 | **T10** — Từ bản chạy thử đến production thật | [T10-san-sang-production.md](T10-san-sang-production.md) | 🚧 **Lô đầu đã làm** (commit `0bf8a50`, 2026-10-06): `/success` hết lộ địa chỉ, banner freeship đúng số, trang 404/lỗi tiếng Việt, rào script production. Qua typecheck/lint/build và review; **chưa kiểm trên trình duyệt hay với giao dịch thật**. Còn mở: VNPAY thật, trang pháp lý, cảnh báo đơn kẹt, thương hiệu thật. Mục 7 so sánh với thehourtea.com |
+| 11 | **T11** — Tra cứu đơn khó đoán hơn | [T11-tra-cuu-don-an-toan.md](T11-tra-cuu-don-an-toan.md) | ✅ Đã làm xong code (2026-10-07), kiểm chứng sandbox rồi; chưa commit, chưa deploy |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 

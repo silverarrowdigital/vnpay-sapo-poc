@@ -55,13 +55,13 @@ describe("sendAlert", () => {
   });
 
   it("sends one mail per reference and kind however often VNPAY retries", async () => {
-    expect(await sendAlert("sapo_failed", "111111")).toBe(true);
-    expect(await sendAlert("sapo_failed", "111111")).toBe(false);
-    expect(await sendAlert("sapo_failed", "111111")).toBe(false);
+    expect(await sendAlert("sapo_failed", "20261006120921111111")).toBe(true);
+    expect(await sendAlert("sapo_failed", "20261006120921111111")).toBe(false);
+    expect(await sendAlert("sapo_failed", "20261006120921111111")).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // A different kind, or a different order, is a different problem.
-    expect(await sendAlert("paid_no_order", "111111")).toBe(true);
-    expect(await sendAlert("sapo_failed", "222222")).toBe(true);
+    expect(await sendAlert("paid_no_order", "20261006120921111111")).toBe(true);
+    expect(await sendAlert("sapo_failed", "20261006120921222222")).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -128,9 +128,9 @@ describe("sendAlert", () => {
 
   it("does nothing but log when alerts are not configured", async () => {
     delete process.env.RESEND_API_KEY;
-    expect(await sendAlert("sapo_failed", "333333", { amountVnd: 1 })).toBe(false);
+    expect(await sendAlert("sapo_failed", "20261006120921333333", { amountVnd: 1 })).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(log.error).toHaveBeenCalledWith("alert.not_configured", expect.objectContaining({ txnRef: "333333" }));
+    expect(log.error).toHaveBeenCalledWith("alert.not_configured", expect.objectContaining({ txnRef: "20261006120921333333" }));
   });
 
   it("never throws: a provider error, a network failure and a timeout all resolve to false", async () => {

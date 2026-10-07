@@ -52,11 +52,10 @@ vi.mock("./store", async (importOriginal) => {
 const { getVariantIndex } = await import("./catalog");
 const { resolveAddress } = await import("./locations");
 const { quoteDiscount } = await import("./discount");
-const { SapoApiError, createOrderOnce } = await import("./sapo");
+const { SapoApiError, createOrderOnce, fetchOrderDetailByRef } = await import("./sapo");
 const { sendAlert } = await import("./alert");
-const { CheckoutError, _resetStore, getOrder, handleIpn, quoteTotals, startCheckout, validateCheckout } = await import(
-  "./order"
-);
+const { CheckoutError, _resetStore, getOrder, handleIpn, lookupOrder, quoteTotals, startCheckout, validateCheckout } =
+  await import("./order");
 
 const SECRET = "TESTSECRETTESTSECRETTESTSECRET12";
 
@@ -374,5 +373,43 @@ describe("handleIpn — the only place a paid order is created", () => {
     expect((await handleIpn(ipn(txnRef, amountVnd, { vnp_TransactionStatus: "01" }))).RspCode).toBe("00");
     expect((await getOrder(txnRef))?.status).toBe("failed");
     expect(createOrderOnce).not.toHaveBeenCalled();
+  });
+});
+
+describe("lookupOrder — reference plus phone, and nothing else", () => {
+  const REF = "20261006120921K3M9Q7TXA2B4C6DE";
+  const detail = { id: 1, name: "#1", phoneDigits: "0912345678", totalVnd: 80_000, shippingVnd: 30_000, discountVnd: 0, lines: [] };
+
+  beforeEach(() => {
+    vi.mocked(fetchOrderDetailByRef).mockResolvedValue(detail as never);
+  });
+
+  it("finds the order for the right phone in any prefix form, with the reference typed in lower case", async () => {
+    const r = await lookupOrder(REF.toLowerCase(), "+84 912 345 678", "203.0.113.7");
+    expect(r.outcome).toBe("found");
+    expect(vi.mocked(fetchOrderDetailByRef).mock.calls[0][1]).toBe(REF);
+  });
+
+  it("answers a wrong phone exactly like a missing order", async () => {
+    const wrong = await lookupOrder(REF, "0900000000", "203.0.113.7");
+    vi.mocked(fetchOrderDetailByRef).mockResolvedValue(null);
+    const missing = await lookupOrder(REF, "0912345678", "203.0.113.8");
+    expect(wrong).toEqual({ outcome: "not_found" });
+    expect(missing).toEqual(wrong);
+  });
+
+  it("does not call Sapo, or count a try, for a malformed reference", async () => {
+    expect(await lookupOrder("abc 123", "0912345678", "203.0.113.7")).toEqual({ outcome: "not_found" });
+    expect(fetchOrderDetailByRef).not.toHaveBeenCalled();
+    const { getOrderStore } = await import("./store");
+    expect(await getOrderStore().count("lookupPhone:912345678")).toBe(0);
+  });
+
+  it("stops after five tries an hour on one phone number, from a different IP every time", async () => {
+    const outcomes: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      outcomes.push((await lookupOrder(REF, i % 2 ? "0912345678" : "+84912345678", `198.51.100.${i}`)).outcome);
+    }
+    expect(outcomes).toEqual(["found", "found", "found", "found", "found", "rate_limited"]);
   });
 });

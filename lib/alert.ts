@@ -23,6 +23,7 @@
  */
 import { getAlertConfig } from "./config";
 import { errorMessage, log } from "./log";
+import { TXN_REF_PATTERN } from "./vnpay";
 import { getOrderStore } from "./store";
 
 export type AlertKind =
@@ -107,11 +108,11 @@ function formatBody(kind: AlertKind, txnRef: string, d: AlertDetails): string {
 }
 
 /**
- * The reference ends up in a subject line and a store key. Ours are 20 digits and the value is bound
- * to VNPAY's signature, so this is defence in depth: anything else is replaced, not trusted.
+ * The reference ends up in a subject line and a store key. The value is bound to VNPAY's signature,
+ * so this is defence in depth: anything that is not one of our two shapes is replaced, not trusted.
  */
 function safeRef(txnRef: string): string {
-  return /^[0-9]{6,40}$/.test(txnRef) ? txnRef : "(ma-khong-hop-le)";
+  return TXN_REF_PATTERN.test(txnRef) ? txnRef : "(ma-khong-hop-le)";
 }
 
 function dedupeKey(kind: AlertKind, ref: string): string {

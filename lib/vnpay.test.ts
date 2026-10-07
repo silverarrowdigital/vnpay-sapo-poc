@@ -5,6 +5,8 @@ import {
   buildSignData,
   createPaymentUrl,
   createTxnRef,
+  normaliseTxnRef,
+  TXN_REF_PATTERN,
   formatVnpDate,
   isPaymentSuccess,
   normaliseIp,
@@ -36,11 +38,25 @@ describe("formatVnpDate", () => {
 });
 
 describe("createTxnRef", () => {
-  it("is the GMT+7 timestamp followed by six digits", () => {
+  it("is the GMT+7 timestamp followed by 16 random symbols", () => {
     const now = new Date("2026-10-06T05:09:21Z");
     const ref = createTxnRef(now);
-    expect(ref).toMatch(/^\d{20}$/);
-    expect(ref.startsWith("20261006120921")).toBe(true);
+    expect(ref).toMatch(/^20261006120921[0-9A-HJKMNP-TV-Z]{16}$/);
+    expect(ref).toHaveLength(30); // VNPAY allows 100
+    expect(TXN_REF_PATTERN.test(ref)).toBe(true);
+  });
+
+  it("does not repeat across 10,000 draws in the same second", () => {
+    const now = new Date("2026-10-06T05:09:21Z");
+    const seen = new Set(Array.from({ length: 10_000 }, () => createTxnRef(now)));
+    expect(seen.size).toBe(10_000);
+  });
+
+  it("still recognises the old 20-digit references, and folds a typed one to upper case", () => {
+    expect(TXN_REF_PATTERN.test("20261006120921603450")).toBe(true);
+    expect(normaliseTxnRef("  20261006120921abcd1234efgh5678 ")).toBe("20261006120921ABCD1234EFGH5678");
+    expect(TXN_REF_PATTERN.test(normaliseTxnRef("abc 123"))).toBe(false);
+    expect(TXN_REF_PATTERN.test("12345")).toBe(false);
   });
 });
 
