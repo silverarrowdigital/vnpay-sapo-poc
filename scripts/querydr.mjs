@@ -120,6 +120,7 @@ const TRANSACTION_STATUS = {
   "06": "VNPAY đã gửi yêu cầu hoàn tiền sang ngân hàng",
   "07": "Giao dịch bị nghi ngờ gian lận",
   "09": "Hoàn tiền bị từ chối",
+  "11": "Giao dịch bị hủy (khách bấm hủy ở trang thanh toán; quan sát trực tiếp 2026-10-07)",
 };
 
 console.log(`Truy vấn ${txnRef} (vnp_TransactionDate ${transactionDate})…\n`);

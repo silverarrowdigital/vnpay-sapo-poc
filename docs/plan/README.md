@@ -23,6 +23,7 @@ Claude đọc file tương ứng, làm đúng phần "Việc", rồi tự chạy
 | 11 | **T11** — Tra cứu đơn khó đoán hơn | [T11-tra-cuu-don-an-toan.md](T11-tra-cuu-don-an-toan.md) | ✅ Đã làm xong code (2026-10-07), kiểm chứng sandbox rồi; chưa commit, chưa deploy |
 | 12 | **T12** — Dựng lại toàn site theo layout `design/site-v3/` | [T12-giao-dien-site-v3.md](T12-giao-dien-site-v3.md) | ✅ Đã làm T12.1–T12.5 (2026-10-07), chưa commit, chưa deploy; T12.6 (collection) bị chặn vì shop chưa có collection nào |
 | 13 | **T13** — Xử lý các mục còn mở trong doc tiến độ | [T13-khep-muc-con-lai.md](T13-khep-muc-con-lai.md) | 🔧 2026-10-07: T13.0, .2–.6, .8, .9 đã làm trong working tree, chưa commit, chưa deploy (129 test đạt); .7 quyết định không đổi; .1, .10–.13 còn chờ. Chủ shop đã chốt 6 câu theo khuyến nghị. T13.0 (tự hỏi VNPAY khi thiếu IPN) chưa kiểm trên production |
+| 14 | **T14** — Sổ giao dịch trên Postgres (PR 4–6) | [T14-so-giao-dich-postgres.md](T14-so-giao-dich-postgres.md) | 📝 Chỉ là kế hoạch (2026-10-07). **Chặn:** chủ tài khoản Vercel phải bật Neon |
 
 **T2 viết lại 2026-10-01.** Project Sanity ở gói **Free**, nên tiết kiệm lượt gọi API là yêu cầu bắt buộc chứ không phải tối ưu để dành. Mục tiêu: lưu lượng tới Sanity phụ thuộc vào tần suất sửa nội dung, **không** phụ thuộc lượng khách truy cập. Kế hoạch giờ mở đầu bằng **T2.0 — gỡ `SANITY_READ_TOKEN`**, vì request có token thường không được CDN phục vụ, tức mỗi lần cache miss là một lượt gọi origin.
 
