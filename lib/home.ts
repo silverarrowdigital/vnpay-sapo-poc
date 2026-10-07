@@ -24,6 +24,13 @@ export const PARTNER_LOGOS: readonly { src: string; alt: string }[] = [];
 export const BEST_SELLER_PRODUCT_IDS: readonly number[] = [];
 export const BEST_SELLER_COUNT = 4;
 
+/**
+ * Customer quotes for "Lan tỏa tình yêu trà". **Empty on purpose** (owner, 2026-10-07): the one quote in
+ * the design was a named person with five stars, and nobody has asked her. Add a quote here only once
+ * the customer has agreed to be quoted by name; the section is not drawn while the list is empty.
+ */
+export const TESTIMONIALS: readonly { quote: string; author: string }[] = [];
+
 export const MARQUEE_WORDS = ["Chiêm nghiệm", "Khởi đầu", "Rạng rỡ", "Rộn ràng", "Bình Yên", "Thư Thái", "Tinh Khôi"] as const;
 
 export const HOME = {
@@ -59,10 +66,6 @@ export const HOME = {
       },
     ],
   },
-  testimonial: {
-    title: "Lan tỏa tình yêu trà",
-    quote: "Quà tặng thiết thực nông sản / đặc sản Việt Nam, cha mẹ chồng người Thổ của mình rất thích!",
-    author: "Nguyễn Hồ Trà My",
-  },
+  testimonialTitle: "Lan tỏa tình yêu trà",
   journalTitle: "Nhâm nhi và đọc",
 } as const;

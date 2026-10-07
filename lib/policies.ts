@@ -19,7 +19,7 @@
  *
  * **Left as the owner wrote it, and worth a human look:** delivery times and the carriers named, the
  * mention of Covid, "thehourtea.com" as the site's name (this deployment has another address until a
- * domain is attached), the two-year retention period (nothing in this app implements it), and the
+ * domain is attached), and the
  * returns text, in which "no returns or refunds" sits beside a promise to refund an order that never
  * arrived, and which excludes discounted goods from exchange — now every order that used a discount
  * code.
@@ -113,7 +113,7 @@ export const POLICIES: readonly PolicyPage[] = [
   "b. Nếu bạn không muốn chúng tôi thu thập thông tin/dữ liệu cá nhân nói trên, bạn có thể không cung cấp hoặc vào bất kỳ lúc nào bằng cách thông báo bằng văn bản hoặc qua email đến chúng tôi. Tuy nhiên, lưu ý rằng việc từ chối hoặc hủy bỏ cho phép chúng tôi thu thập, sử dụng hoặc xử lý dữ liệu cá nhân của bạn có thể làm ảnh hưởng đến giao dịch của bạn với chúng tôi và/hoặc ảnh hưởng đến việc bạn sử dụng các dịch vụ với nền tảng được liên kết tại Website.",
   "c. Chúng tôi không cố ý thu thập thông tin cá nhân của trẻ em dưới 13 tuổi mà không có sự kiểm soát của cha mẹ hoặc người giám hộ hợp pháp. Nếu quý khách dưới 13 tuổi, xin vui lòng không cung cấp cho chúng tôi bất kỳ thông tin cá nhân gì. Nếu chúng tôi xác định được người dùng có độ tuổi dưới 13 và đã gửi thông tin cá nhân mà không có sự kiểm soát của người giám hộ, chúng tôi sẽ xoá bỏ thông tin cá nhân này khỏi dữ liệu của chúng tôi mà không cần thông báo trước.",
   "1.5. Thời gian lưu trữ và cam kết bảo mật:",
-  "a. Thời gian lưu trữ là 2 năm kể từ thời điểm đơn hàng cuối cùng phát sinh.",
+  "a. Thông tin giao hàng (họ tên, số điện thoại, email, địa chỉ) trong sổ giao dịch của website được tự động xoá sau 90 ngày kể từ khi đơn hàng được tạo. Đơn hàng đã được ghi vào hệ thống bán hàng của cửa hàng (Sapo) được lưu tại đó theo cách cửa hàng quản lý đơn hàng.",
   "b. Chúng tôi thực hiện các biện pháp bảo mật khác nhau và luôn nỗ lực để đảm bảo sự an toàn dữ liệu cá nhân của bạn trên các hệ thống quản lý của chúng tôi. Dữ liệu cá nhân của bạn sẽ được lưu trữ bằng các mạng bảo mật và chỉ có thể truy cập được bởi một số nhân viên được quyền truy cập đặc biệt. Tuy nhiên, chúng tôi không thể có sự đảm bảo an ninh tuyệt đối bởi các sự cố phát sinh, trường hợp có sự cố xảy ra chúng tôi sẽ dùng mọi biện pháp để khắc phục và hạn chế rủi ro nhất.",
   "c. Chúng tôi cam kết thực hiện duy trì dữ liệu cá nhân đúng quy định của pháp luật. Trong trường hợp cần thiết và trong phạm vi cho phép của pháp luật, chúng tôi có thể tiêu hủy dữ liệu cá nhân của bạn một cách an toàn mà không cần thông báo trước.",
   "2. Thương hiệu và bản quyền",

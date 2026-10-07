@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import ProductTile from "@/components/ProductTile";
 import { OPEN_GRAPH } from "@/lib/business";
-import { getStorefrontProducts } from "@/lib/catalog";
+import { getCachedStorefrontProducts } from "@/app/listing-cache";
 import { errorMessage, log } from "@/lib/log";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
 export default async function ShopPage() {
   let products;
   try {
-    products = await getStorefrontProducts();
+    products = await getCachedStorefrontProducts();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import ProductTile from "@/components/ProductTile";
 import { listPosts } from "@/lib/blog";
-import { getStorefrontProducts } from "@/lib/catalog";
+import { getCachedStorefrontProducts } from "@/app/listing-cache";
 import {
   BEST_SELLER_COUNT,
   BEST_SELLER_PRODUCT_IDS,
@@ -11,6 +11,7 @@ import {
   MARQUEE_WORDS,
   PARTNER_LOGOS,
   SHOW_HEALTH_CLAIMS,
+  TESTIMONIALS,
 } from "@/lib/home";
 import { errorMessage, log } from "@/lib/log";
 import { isGroupSoldOut, type ProductGroup } from "@/lib/product";
@@ -53,7 +54,7 @@ function pickBestSellers(listed: ProductGroup[]): ProductGroup[] {
 export default async function HomePage() {
   let bestSellers: ProductGroup[] | null = null;
   try {
-    bestSellers = pickBestSellers(await getStorefrontProducts());
+    bestSellers = pickBestSellers(await getCachedStorefrontProducts());
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
   }
@@ -209,18 +210,23 @@ export default async function HomePage() {
         </section>
       )}
 
-      <section aria-labelledby="testi-title" className="border-t border-line px-[clamp(16px,5vw,96px)] py-[clamp(64px,6vw,112px)]">
-        <h2 id="testi-title" className="m-0 mb-12 text-[clamp(1.75rem,2.6vw,2.25rem)] leading-[1.3] font-normal">
-          {HOME.testimonial.title}
-        </h2>
-        <figure className="m-0 grid max-w-[360px] gap-4">
-          <blockquote className="m-0">“{HOME.testimonial.quote}”</blockquote>
-          <span role="img" aria-label="5 sao" className="text-sm tracking-[0.15em]">
-            ★★★★★
-          </span>
-          <figcaption className="font-medium">— {HOME.testimonial.author}</figcaption>
-        </figure>
-      </section>
+      {TESTIMONIALS.length > 0 && (
+        <section aria-labelledby="testi-title" className="border-t border-line px-[clamp(16px,5vw,96px)] py-[clamp(64px,6vw,112px)]">
+          <h2 id="testi-title" className="m-0 mb-12 text-[clamp(1.75rem,2.6vw,2.25rem)] leading-[1.3] font-normal">
+            {HOME.testimonialTitle}
+          </h2>
+          <ul className="m-0 grid list-none gap-8 p-0 min-[520px]:grid-cols-2 lg:grid-cols-4">
+            {TESTIMONIALS.map((t) => (
+              <li key={t.author}>
+                <figure className="m-0 grid gap-4">
+                  <blockquote className="m-0">“{t.quote}”</blockquote>
+                  <figcaption className="font-medium">— {t.author}</figcaption>
+                </figure>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {posts.length > 0 && (
         <section aria-labelledby="journal-title" className="px-4 py-[clamp(64px,6vw,112px)] lg:px-10">
