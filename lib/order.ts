@@ -34,6 +34,13 @@ import {
   type SapoOrderRef,
 } from "./sapo";
 import { queryVnpayTransaction } from "./querydr";
+import {
+  ledgerCompare,
+  ledgerRecordCheckout,
+  ledgerRecordPayment,
+  ledgerRecordSapo,
+  ledgerRecordWebhook,
+} from "./ledger";
 import { getOrderStore, type OrderStatus, type OrderStore, type PendingOrder, type PendingOrderLine } from "./store";
 import {
   CANCELLED_RESPONSE_CODE,
@@ -435,6 +442,9 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
   // Deliberately not guarded: if the store cannot record the order we must not hand out a payment
   // URL, because the IPN would later have nothing to confirm. The route turns this into a 500.
   await store.put(order);
+  // Also in the Postgres ledger (T14 PR 5). Never throws and never blocks the payment: Redis above is
+  // still what the shop reads from.
+  await ledgerRecordCheckout(order);
 
   log.info("checkout.created", {
     txnRef,
@@ -642,7 +652,9 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     return { RspCode: "97", Message: "Invalid signature" };
   }
   log.info("ipn.checksum_verified", { txnRef: params.vnp_TxnRef });
-  return settlePayment(params);
+  const result = await settlePayment(params);
+  await ledgerRecordWebhook("ipn", params, result.RspCode);
+  return result;
 }
 
 /**
@@ -767,6 +779,8 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
       responseCode: params.vnp_ResponseCode,
       transactionStatus: params.vnp_TransactionStatus,
     });
+    await ledgerRecordPayment(txnRef, order.status === "cancelled" ? "cancelled" : "failed", params);
+    await ledgerCompare(order);
     return { RspCode: "00", Message: "Confirm Success" };
   }
 
@@ -779,6 +793,7 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
     log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(err) });
     return { RspCode: "99", Message: "Unknown error" };
   }
+  await ledgerRecordPayment(txnRef, "paid", params);
 
   try {
     const sapo = getSapoConfig();
@@ -797,6 +812,8 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
       sapoOrderId: sapoOrder.id,
       sapoOrderName: sapoOrder.name,
     });
+    await ledgerRecordSapo(txnRef, { ok: true, id: sapoOrder.id, name: sapoOrder.name });
+    await ledgerCompare(order);
     return { RspCode: "00", Message: "Confirm Success" };
   } catch (err) {
     order.status = "sapo_error";
@@ -808,6 +825,8 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
     } catch (persistErr) {
       log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(persistErr) });
     }
+    await ledgerRecordSapo(txnRef, { ok: false });
+    await ledgerCompare(order);
     // Told once per hour per order, however many times VNPAY retries. The reason is the HTTP status
     // only: a Sapo response body can carry the customer's details.
     await notifyOwner("sapo_failed", txnRef, {
@@ -888,6 +907,7 @@ export async function reconcilePendingPayment(txnRef: string, now: number = Date
     }
     log.warn("querydr.paid_without_ipn", { txnRef, ageSeconds: Math.round(age / 1000) });
     const res = await settlePayment(answer.params);
+    await ledgerRecordWebhook("querydr", answer.params, res.RspCode);
     log.info("querydr.settled", { txnRef, rspCode: res.RspCode });
     return res.RspCode === "00" || res.RspCode === "02" ? "settled" : "no_answer";
   } catch (err) {
