@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { log } from "@/lib/log";
-import { classifyReturn } from "@/lib/order";
+import { classifyReturn, markPaidReturn } from "@/lib/order";
 import { extractVnpParams } from "@/lib/vnpay";
 
 export const runtime = "nodejs";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Browser redirect back from VNPAY. Per the VNPAY docs this only verifies the checksum and
- * shows a result — it NEVER creates or updates orders. The IPN is authoritative.
+ * shows a result — it NEVER creates or updates an order. The IPN (or a querydr answer) is authoritative.
  * Only the txnRef and a coarse outcome go into the URL (no customer data).
  */
 export async function GET(request: NextRequest) {
@@ -26,6 +26,9 @@ export async function GET(request: NextRequest) {
   });
 
   const { outcome, txnRef, code } = classifyReturn(params);
+  // Records only a hint that VNPAY's signed return said "paid" (so recovery asks about this order
+  // first); it changes no order. See markPaidReturn.
+  if (outcome === "success" && txnRef) await markPaidReturn(txnRef);
 
   const base = process.env.APP_BASE_URL?.trim() || request.nextUrl.origin;
   const target = new URL("/success", base);

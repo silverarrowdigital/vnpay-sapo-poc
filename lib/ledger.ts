@@ -25,7 +25,7 @@
  *
  * Takes the database as an argument so tests can pass an in-process Postgres (PGlite).
  */
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { getDb } from "./db/client";
 import * as schema from "./db/schema";
@@ -66,7 +66,15 @@ export function describeDbError(err: unknown): string {
  * Runs `fn` against the ledger and returns its result, or `fallback` on any failure, timeout,
  * missing database or open breaker. Never throws.
  */
-async function guarded<T>(what: string, txnRef: string | null, fallback: T, fn: (db: LedgerDb) => Promise<T>, db?: LedgerDb): Promise<T> {
+async function guarded<T>(
+  what: string,
+  txnRef: string | null,
+  fallback: T,
+  fn: (db: LedgerDb) => Promise<T>,
+  db?: LedgerDb,
+  /** A read that fails or is slow must not switch off the writes of a payment running at the same moment. */
+  opensBreaker = true,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const target = db ?? getDb();
@@ -82,7 +90,7 @@ async function guarded<T>(what: string, txnRef: string | null, fallback: T, fn: 
     log.info("ledger.ok", { what, txnRef });
     return result;
   } catch (err) {
-    breakerUntil = Date.now() + BREAKER_MS;
+    if (opensBreaker) breakerUntil = Date.now() + BREAKER_MS;
     log.error("ledger.write_failed", { what, txnRef, error: describeDbError(err) });
     return fallback;
   } finally {
@@ -264,6 +272,7 @@ export async function ledgerCompare(order: PendingOrder, db?: LedgerDb): Promise
       return true;
     },
     db,
+    false,
   );
 }
 
@@ -285,5 +294,86 @@ export async function ledgerPurgeCustomers(db?: LedgerDb): Promise<number> {
       return rows.length;
     },
     db,
+  );
+}
+
+export interface SweepCandidate {
+  txnRef: string;
+  createdAt: Date;
+  /** "pending": VNPAY has not reported yet. "unsynced": paid, but Sapo has no order. */
+  kind: "pending" | "unsynced";
+}
+
+/**
+ * The payments worth asking about (T14 PR 6, lib/sweep.ts): VNPAY orders still `pending` between one
+ * minute and two hours old, and paid orders from the last two hours whose Sapo order is not
+ * `created` (two hours is how long `reconcilePendingPayment` is willing to act on an order, so a
+ * longer list would only fill slots with rows it then skips). **Newest first**: a payment that just
+ * came in is the one worth asking about, and abandoned checkouts, which stay `pending` for ever, are
+ * the oldest. A ledger that cannot be read yields none — the sweep then does nothing rather than guess.
+ */
+export async function ledgerSweepCandidates(limit: number, db?: LedgerDb): Promise<SweepCandidate[]> {
+  return guarded(
+    "sweep",
+    null,
+    [] as SweepCandidate[],
+    async (d) => {
+      const rows = await d
+        .select({ ref: orders.webRef, payment: orders.paymentStatus, createdAt: orders.createdAt })
+        .from(orders)
+        .where(
+          sql`(${orders.paymentMethod} = 'vnpay' and ${orders.paymentStatus} = 'pending'
+               and ${orders.createdAt} < now() - interval '60 seconds' and ${orders.createdAt} > now() - interval '2 hours')
+              or (${orders.paymentStatus} = 'paid' and ${orders.integrationStatus} <> 'created'
+               and ${orders.createdAt} < now() - interval '60 seconds' and ${orders.createdAt} > now() - interval '2 hours')`,
+        )
+        .orderBy(desc(orders.createdAt))
+        .limit(limit);
+      return rows.map((r) => ({
+        txnRef: r.ref,
+        createdAt: r.createdAt,
+        kind: r.payment === "paid" ? ("unsynced" as const) : ("pending" as const),
+      }));
+    },
+    db,
+    false,
+  );
+}
+
+/**
+ * The parameters of a payment the ledger already knows is paid, for retrying the Sapo order of an
+ * order that was paid and then refused by Sapo without asking VNPAY again. `undefined` if the ledger
+ * has no paid attempt for the reference (or cannot be read), in which case the caller asks VNPAY.
+ */
+export async function ledgerPaidParams(txnRef: string, db?: LedgerDb): Promise<VnpParams | undefined> {
+  return guarded(
+    "paid_params",
+    txnRef,
+    undefined as VnpParams | undefined,
+    async (d) => {
+      const [a] = await d
+        .select({
+          no: paymentAttempts.vnpTransactionNo,
+          bank: paymentAttempts.vnpBankCode,
+          date: paymentAttempts.vnpPayDate,
+          amount: paymentAttempts.amountVnd,
+          status: paymentAttempts.status,
+        })
+        .from(paymentAttempts)
+        .where(and(eq(paymentAttempts.vnpTxnRef, txnRef), eq(paymentAttempts.status, "paid")));
+      if (a === undefined || a.no === null) return undefined;
+      return {
+        vnp_TxnRef: txnRef,
+        // "00" by construction: the row is `paid`, which only a verified success writes.
+        vnp_ResponseCode: "00",
+        vnp_TransactionStatus: "00",
+        vnp_Amount: String(a.amount * 100),
+        vnp_TransactionNo: a.no,
+        ...(a.bank ? { vnp_BankCode: a.bank } : {}),
+        ...(a.date ? { vnp_PayDate: a.date } : {}),
+      };
+    },
+    db,
+    false,
   );
 }

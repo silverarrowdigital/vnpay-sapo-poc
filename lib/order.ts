@@ -36,6 +36,7 @@ import {
 import { queryVnpayTransaction } from "./querydr";
 import {
   ledgerCompare,
+  ledgerPaidParams,
   ledgerRecordCheckout,
   ledgerRecordPayment,
   ledgerRecordSapo,
@@ -845,6 +846,57 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
 // ---------------------------------------------------------------------------
 
 /**
+ * The hint that makes the scarce querydr slot go to the right order. VNPAY's browser return is signed;
+ * when `/api/vnpay/return` has verified it and it says "paid", this records that fact for the
+ * reference. It changes **no order**: it only means "VNPAY itself told this customer's browser the
+ * payment succeeded", which is what makes an unconfirmed order worth asking VNPAY about first — and
+ * what a stranger typing `/success?outcome=success` cannot fake. Never throws.
+ */
+export async function markPaidReturn(txnRef: string): Promise<void> {
+  try {
+    if (TXN_REF_PATTERN.test(txnRef)) await getOrderStore().hit(`paid-return:${txnRef}`, 2 * 60 * 60);
+  } catch (err) {
+    log.warn("paid_return.mark_failed", { txnRef, error: errorMessage(err) });
+  }
+}
+
+export async function hasPaidReturn(txnRef: string): Promise<boolean> {
+  try {
+    return (await getOrderStore().count(`paid-return:${txnRef}`)) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Tell the owner a customer's browser was told "paid" and nothing — no IPN, no querydr — confirmed it
+ * before the sweep gave up. Deduplicated hourly per reference like every alert.
+ */
+export async function alertUnsettledPaidReturn(txnRef: string): Promise<void> {
+  const order = await getOrderStore()
+    .get(txnRef)
+    .catch(() => undefined);
+  // Re-read before speaking: the order may have been finished by an IPN while the sweep was working
+  // (or while the ledger, which lists it, lagged behind). A false "paid, no order" mail sends the owner
+  // to create an order by hand or refund a customer who already has one.
+  if (order !== undefined && !isReconcilable(order.status)) return;
+  if (order?.paymentMethod === "cod") return;
+  if (order?.status === "sapo_error" || order?.status === "processing") {
+    // Payment confirmed, Sapo has not taken the order: a different problem with a different remedy.
+    await notifyOwner("sapo_failed", txnRef, {
+      amountVnd: order.amountVnd,
+      vnpTransactionNo: order.vnpTransactionNo,
+      reason: "payment confirmed, but the Sapo order is still not created after repeated retries",
+    });
+    return;
+  }
+  await notifyOwner("paid_no_order", txnRef, {
+    amountVnd: order?.amountVnd,
+    reason: "the browser return said paid, but neither an IPN nor a VNPAY query confirmed it",
+  });
+}
+
+/**
  * How long after the browser *first came back* an order waits for its IPN before we go and ask. An
  * IPN usually lands in 5–13 s. Counted from the first return, not from checkout: a customer can spend
  * minutes on VNPAY's card and OTP pages, so checkout time says nothing about how long the IPN has had.
@@ -852,6 +904,8 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
 export const QUERYDR_AFTER_SECONDS = 60;
 /** Past this the order is no longer worth asking about from a page view. */
 const QUERYDR_UNTIL_MS = 2 * 60 * 60 * 1000;
+/** One cool-down for the whole terminal: see the 94 note in lib/querydr.ts. */
+const QUERYDR_COOLDOWN_KEY = "querydr-cooldown";
 /** What an order may be in for us to ask. Never "completed", "cancelled" or "failed". */
 const RECONCILABLE: readonly OrderStatus[] = ["pending", "processing", "sapo_error"];
 
@@ -877,7 +931,11 @@ export type ReconcileOutcome = "skipped" | "throttled" | "no_answer" | "not_paid
  * there is nothing else to retry it, and `settlePayment` is idempotent. Never throws: it is called
  * while rendering a page.
  */
-export async function reconcilePendingPayment(txnRef: string, now: number = Date.now()): Promise<ReconcileOutcome> {
+export async function reconcilePendingPayment(
+  txnRef: string,
+  now: number = Date.now(),
+  opts: { skipWait?: boolean } = {},
+): Promise<ReconcileOutcome> {
   try {
     if (!TXN_REF_PATTERN.test(txnRef)) return "skipped";
     const store = getOrderStore();
@@ -885,21 +943,58 @@ export async function reconcilePendingPayment(txnRef: string, now: number = Date
     if (!order || order.paymentMethod === "cod" || !isReconcilable(order.status)) return "skipped";
     const age = now - Date.parse(order.createdAt);
     if (age > QUERYDR_UNTIL_MS) return "skipped";
+    // The result page asks only for an order whose browser return VNPAY signed as "paid" (see
+    // markPaidReturn). Without that, a URL anyone can type would be enough to spend the terminal's one
+    // querydr per five minutes. The sweep (skipWait) lists its own candidates and needs no marker.
+    if (opts.skipWait !== true && !(await hasPaidReturn(txnRef))) return "skipped";
 
     // Wait QUERYDR_AFTER_SECONDS from the first time this is asked. A hit counter's window starts at
     // its first hit and the key vanishes when it ends, so: "seen" lives 60 s; "known" outlives it.
     // First sight (neither exists) records both and waits; while "seen" lives it waits; once it has
     // gone but "known" has not, the minute has passed and it may ask.
-    if ((await store.count(`querydr-known:${txnRef}`)) === 0) {
-      await store.hit(`querydr-seen:${txnRef}`, QUERYDR_AFTER_SECONDS);
-      await store.hit(`querydr-known:${txnRef}`, QUERYDR_UNTIL_MS / 1000);
-      return "skipped";
+    // The sweep (lib/sweep.ts) has already waited — it only lists orders over a minute old — so it
+    // skips this wait; the once-a-minute limit below still applies to it.
+    if (opts.skipWait !== true) {
+      if ((await store.count(`querydr-known:${txnRef}`)) === 0) {
+        await store.hit(`querydr-seen:${txnRef}`, QUERYDR_AFTER_SECONDS);
+        await store.hit(`querydr-known:${txnRef}`, QUERYDR_UNTIL_MS / 1000);
+        return "skipped";
+      }
+      if ((await store.count(`querydr-seen:${txnRef}`)) > 0) return "skipped";
     }
-    if ((await store.count(`querydr-seen:${txnRef}`)) > 0) return "skipped";
 
     if ((await store.hit(`querydr:${txnRef}`, 60)) > 1) return "throttled";
 
+    // An order Sapo refused after the payment was already verified needs no VNPAY at all: what Sapo
+    // wants — the transaction number, bank and pay date — was recorded in the ledger when the payment
+    // was first confirmed by a signed VNPAY message. Retrying from that does not spend the scarce
+    // querydr slot, and it decides nothing new about whether the order was paid.
+    if (order.status === "sapo_error" || order.status === "processing") {
+      const recorded = await ledgerPaidParams(txnRef);
+      if (recorded !== undefined) {
+        log.info("reconcile.retry_sapo_from_ledger", { txnRef });
+        // The attempt's amount was copied from this order at checkout, so settlePayment's amount check is
+        // not an independent test here. What makes this safe is that the attempt is `paid` only because
+        // the original IPN or querydr passed the amount check against VNPAY's own figure first.
+        const res = await settlePayment(recorded);
+        return res.RspCode === "00" || res.RspCode === "02" ? "settled" : "no_answer";
+      }
+    }
+
+    // VNPAY's sandbox accepts about one querydr every five minutes for the whole terminal and answers 94
+    // to the rest (lib/querydr.ts). Asking inside that window only earns a 94, so one shared cool-down
+    // covers the result page and the sweep alike.
+    // Claimed atomically (SET NX EX), so the page and the sweep cannot both pass this line, and a lost
+    // EXPIRE cannot leave it set for ever.
+    if (!(await store.kvSetIfAbsent(QUERYDR_COOLDOWN_KEY, "1", 290))) return "throttled";
+
     const answer = await queryVnpayTransaction(txnRef);
+    // A 94 means a window we did not start is open (a laptop, a preview, a person with the script): try
+    // again in a minute rather than waiting out our own five.
+    if (!answer.ok && answer.reason === "rate_limited") {
+      await store.kvSet(QUERYDR_COOLDOWN_KEY, "1", 60);
+      return "throttled";
+    }
     if (!answer.ok) return "no_answer";
     if (!isPaymentSuccess(answer.params)) {
       log.info("querydr.not_paid", { txnRef, transactionStatus: answer.params.vnp_TransactionStatus });

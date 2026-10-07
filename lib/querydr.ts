@@ -104,7 +104,7 @@ export function queryDrToIpnParams(res: Record<string, unknown>): VnpParams {
 
 export type QueryDrResult =
   | { ok: true; params: VnpParams }
-  | { ok: false; reason: "not_configured" | "network" | "bad_response" | "bad_checksum" | "not_found_or_error" };
+  | { ok: false; reason: "not_configured" | "network" | "bad_response" | "bad_checksum" | "not_found_or_error" | "rate_limited" };
 
 /** Never throws. Logs the reference and a reason, never the answer's body. */
 export async function queryVnpayTransaction(txnRef: string): Promise<QueryDrResult> {
@@ -139,6 +139,14 @@ export async function queryVnpayTransaction(txnRef: string): Promise<QueryDrResu
 
   // A "no such transaction" answer (91) and a checksum error (97) come back without our fields, and
   // are not signed the same way; both mean there is nothing to act on.
+  // 94: "duplicate request within the API's time limit". Measured on the sandbox on 2026-10-07: after
+  // one querydr was accepted, every further one — for the same reference or another — answered 94 for
+  // about five minutes (accepted at 18:52:16, refused at +9 s, +79 s, +3 m 39 s and +4 m 40 s, accepted
+  // again at +4 m 52 s). So this is not a signal about the payment: it means "ask later".
+  if (json.vnp_ResponseCode === "94") {
+    log.info("querydr.rate_limited", { txnRef });
+    return { ok: false, reason: "rate_limited" };
+  }
   if (json.vnp_ResponseCode !== "00") {
     log.info("querydr.not_a_payment", { txnRef, responseCode: String(json.vnp_ResponseCode ?? "") });
     return { ok: false, reason: "not_found_or_error" };

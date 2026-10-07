@@ -19,6 +19,10 @@ vi.mock("./log", () => ({
 vi.mock("./catalog", () => ({ getVariantIndex: vi.fn() }));
 vi.mock("./alert", () => ({ sendAlert: vi.fn(async () => true) }));
 vi.mock("./querydr", () => ({ queryVnpayTransaction: vi.fn() }));
+vi.mock("./ledger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ledger")>()),
+  ledgerPaidParams: vi.fn(async () => undefined),
+}));
 vi.mock("./locations", () => ({ resolveAddress: vi.fn() }));
 vi.mock("./discount", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discount")>()),
@@ -60,7 +64,8 @@ const { quoteDiscount } = await import("./discount");
 const { SapoApiError, createOrderOnce, fetchOrderDetailByRef } = await import("./sapo");
 const { sendAlert } = await import("./alert");
 const { queryVnpayTransaction } = await import("./querydr");
-const { CheckoutError, _resetStore, getOrder, handleIpn, lookupOrder, quoteTotals, reconcilePendingPayment, startCheckoutOnce, startCheckout, validateCheckout } =
+const { ledgerPaidParams } = await import("./ledger");
+const { CheckoutError, _resetStore, getOrder, alertUnsettledPaidReturn, handleIpn, lookupOrder, markPaidReturn, quoteTotals, reconcilePendingPayment, startCheckoutOnce, startCheckout, validateCheckout } =
   await import("./order");
 
 const SECRET = "TESTSECRETTESTSECRETTESTSECRET12";
@@ -435,6 +440,8 @@ describe("reconcilePendingPayment — VNPAY took the money and never sent the IP
   async function pending(): Promise<{ txnRef: string; amountVnd: number }> {
     catalog(product(1001, 348_000, 68));
     const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    // The browser return was signed "paid": what lets the result page ask VNPAY about this order.
+    await markPaidReturn(started.txnRef);
     return { txnRef: started.txnRef, amountVnd: 378_000 };
   }
 
@@ -490,8 +497,8 @@ describe("reconcilePendingPayment — VNPAY took the money and never sent the IP
     expect(await reconcilePendingPayment(txnRef)).toBe("no_answer"); // Sapo failed: 99
     expect((await getOrder(txnRef))?.status).toBe("sapo_error");
 
-    vi.advanceTimersByTime(61_000);
-    expect(await reconcilePendingPayment(txnRef)).toBe("settled"); // the next minute retries
+    vi.advanceTimersByTime(291_000); // past the five-minute cool-down VNPAY forces on querydr
+    expect(await reconcilePendingPayment(txnRef)).toBe("settled");
     expect((await getOrder(txnRef))?.status).toBe("completed");
   });
 
@@ -616,3 +623,216 @@ describe("startCheckoutOnce — one request, one order (T13.4)", () => {
 function getVariantIndexCalls(): number {
   return vi.mocked(getVariantIndex).mock.calls.length;
 }
+
+describe("reconcilePendingPayment with skipWait — what the sweep uses", () => {
+  async function pending(): Promise<{ txnRef: string; amountVnd: number }> {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    return { txnRef: started.txnRef, amountVnd: 378_000 };
+  }
+  const paidAnswer = (txnRef: string, amountVnd: number, overrides: Record<string, string> = {}) => ({
+    ok: true as const,
+    params: {
+      vnp_TmnCode: "TESTTMN1",
+      vnp_TxnRef: txnRef,
+      vnp_Amount: String(amountVnd * 100),
+      vnp_ResponseCode: "00",
+      vnp_TransactionStatus: "00",
+      vnp_TransactionNo: "15697481",
+      vnp_BankCode: "NCB",
+      vnp_PayDate: "20261007134156",
+      ...overrides,
+    },
+  });
+
+  it("asks at once, without the first-sight wait, and settles the order exactly once", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(paidAnswer(txnRef, amountVnd));
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("skipped"); // now completed
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it("still asks VNPAY at most once a minute for one reference", async () => {
+    const { txnRef } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("no_answer");
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("throttled");
+    expect(queryVnpayTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("changes nothing when VNPAY says the payment did not succeed", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(paidAnswer(txnRef, amountVnd, { vnp_TransactionStatus: "11" }));
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("not_paid");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await getOrder(txnRef))?.status).toBe("pending");
+  });
+
+  it("still leaves alone an order older than two hours, one already finished, and a reference it never issued", async () => {
+    const { txnRef, amountVnd } = await pending();
+    expect(await reconcilePendingPayment(txnRef, Date.now() + 3 * 60 * 60 * 1000, { skipWait: true })).toBe("skipped");
+    expect(await reconcilePendingPayment("20200101000000ABCDEFGHJKMNPQRST", Date.now(), { skipWait: true })).toBe("skipped");
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("skipped");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+  });
+
+  it("retries a paid order Sapo refused, since no IPN is coming to do it", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue(paidAnswer(txnRef, amountVnd));
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("no_answer");
+    expect((await getOrder(txnRef))?.status).toBe("sapo_error");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.advanceTimersByTime(291_000); // past the five-minute cool-down
+      expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+});
+
+describe("VNPAY's one-querydr-per-five-minutes limit", () => {
+  async function pending(): Promise<{ txnRef: string; amountVnd: number }> {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    return { txnRef: started.txnRef, amountVnd: 378_000 };
+  }
+
+  it("does not ask for a second order inside the cool-down that the first answer started", async () => {
+    const a = await pending();
+    const b = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+    expect(await reconcilePendingPayment(a.txnRef, Date.now(), { skipWait: true })).toBe("no_answer");
+    expect(await reconcilePendingPayment(b.txnRef, Date.now(), { skipWait: true })).toBe("throttled");
+    expect(queryVnpayTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats VNPAY's 94 as 'ask later', not as an answer about the payment", async () => {
+    const { txnRef } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "rate_limited" });
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("throttled");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await getOrder(txnRef))?.status).toBe("pending");
+  });
+
+  it("retries Sapo for an order VNPAY already confirmed from what the ledger recorded, without asking VNPAY", async () => {
+    const { txnRef, amountVnd } = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({
+      ok: true as const,
+      params: {
+        vnp_TmnCode: "TESTTMN1",
+        vnp_TxnRef: txnRef,
+        vnp_Amount: String(amountVnd * 100),
+        vnp_ResponseCode: "00",
+        vnp_TransactionStatus: "00",
+        vnp_TransactionNo: "15697481",
+        vnp_BankCode: "NCB",
+        vnp_PayDate: "20261007134156",
+      },
+    });
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("no_answer"); // paid, Sapo refused
+      expect((await getOrder(txnRef))?.status).toBe("sapo_error");
+      vi.mocked(queryVnpayTransaction).mockClear();
+
+      vi.advanceTimersByTime(61_000); // inside the cool-down: querydr would be refused, but the ledger knows
+      vi.mocked(ledgerPaidParams).mockResolvedValueOnce({
+        vnp_TxnRef: txnRef,
+        vnp_Amount: String(amountVnd * 100),
+        vnp_ResponseCode: "00",
+        vnp_TransactionStatus: "00",
+        vnp_TransactionNo: "15697481",
+        vnp_BankCode: "NCB",
+        vnp_PayDate: "20261007134156",
+      });
+      expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+      expect(queryVnpayTransaction).not.toHaveBeenCalled();
+      expect((await getOrder(txnRef))?.status).toBe("completed");
+      const last = vi.mocked(createOrderOnce).mock.calls.at(-1)![1];
+      expect(last).toMatchObject({ txnRef, vnpTransactionNo: "15697481", vnpBankCode: "NCB", vnpPayDate: "20261007134156" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let the result page spend the terminal's querydr slot on an order VNPAY never signed as paid", async () => {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4"); // no markPaidReturn
+    expect(await reconcilePendingPayment(started.txnRef)).toBe("skipped");
+    expect(await reconcilePendingPayment(started.txnRef, Date.now(), { skipWait: false })).toBe("skipped");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+  });
+
+  it("lets only one of two simultaneous callers take the terminal's querydr slot", async () => {
+    const a = await pending();
+    const b = await pending();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+    const results = await Promise.all([
+      reconcilePendingPayment(a.txnRef, Date.now(), { skipWait: true }),
+      reconcilePendingPayment(b.txnRef, Date.now(), { skipWait: true }),
+    ]);
+    expect(results.sort()).toEqual(["no_answer", "throttled"]);
+    expect(queryVnpayTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a 94 asks again in a minute, not in five", async () => {
+    const a = await pending();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.mocked(queryVnpayTransaction).mockResolvedValueOnce({ ok: false, reason: "rate_limited" });
+      expect(await reconcilePendingPayment(a.txnRef, Date.now(), { skipWait: true })).toBe("throttled");
+      vi.advanceTimersByTime(61_000);
+      vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: false, reason: "network" });
+      expect(await reconcilePendingPayment(a.txnRef, Date.now(), { skipWait: true })).toBe("no_answer"); // asked again
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries Sapo from the ledger for an order left in 'processing' too", async () => {
+    const { txnRef, amountVnd } = await pending();
+    // A render killed mid-settle leaves Redis at 'processing'.
+    const order = (await getOrder(txnRef))!;
+    const { getOrderStore } = await import("./store");
+    await getOrderStore().put({ ...order, status: "processing" });
+    vi.mocked(ledgerPaidParams).mockResolvedValueOnce({
+      vnp_TxnRef: txnRef,
+      vnp_Amount: String(amountVnd * 100),
+      vnp_ResponseCode: "00",
+      vnp_TransactionStatus: "00",
+      vnp_TransactionNo: "15697481",
+    });
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+
+  it("does not mail 'paid, no order' about an order an IPN has since completed", async () => {
+    const { txnRef, amountVnd } = await pending();
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    vi.mocked(sendAlert).mockClear();
+    await alertUnsettledPaidReturn(txnRef);
+    expect(sendAlert).not.toHaveBeenCalled();
+  });
+
+  it("mails 'paid, no order' for a still-pending order and 'Sapo failed' for one Sapo refused", async () => {
+    const a = await pending();
+    await alertUnsettledPaidReturn(a.txnRef);
+    expect(sendAlert).toHaveBeenCalledWith("paid_no_order", a.txnRef, expect.objectContaining({ amountVnd: a.amountVnd }));
+
+    const b = await pending();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    await handleIpn(ipn(b.txnRef, b.amountVnd)); // paid, Sapo refused → sapo_error
+    vi.mocked(sendAlert).mockClear();
+    await alertUnsettledPaidReturn(b.txnRef);
+    expect(sendAlert).toHaveBeenCalledWith("sapo_failed", b.txnRef, expect.anything());
+    expect(sendAlert).not.toHaveBeenCalledWith("paid_no_order", b.txnRef, expect.anything());
+  });
+});

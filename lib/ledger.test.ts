@@ -27,6 +27,8 @@ const {
   ledgerRecordPayment,
   ledgerRecordSapo,
   ledgerRecordWebhook,
+  ledgerPaidParams,
+  ledgerSweepCandidates,
 } = await import("./ledger");
 const { log } = await import("./log");
 
@@ -229,5 +231,88 @@ describe("the 90-day purge", () => {
     expect(old.amountVnd).toBe(80_000);
     expect(young.customer).not.toBeNull();
     expect(await ledgerPurgeCustomers(db)).toBe(0); // nothing left to empty
+  });
+});
+
+describe("the sweep's candidate list", () => {
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000);
+  const backdate = (ref: string, seconds: number) => db.update(schema.orders).set({ createdAt: ago(seconds) }).where(eq(schema.orders.webRef, ref));
+
+  it("lists a VNPAY payment still pending after a minute, a paid order Sapo has not taken, and nothing else", async () => {
+    for (const r of ["W-FRESH", "W-PENDING", "W-OLD", "W-PAID-OK", "W-PAID-NOSAPO", "W-FAILED"]) await ledgerRecordCheckout(pending(r), db);
+    await backdate("W-PENDING", 200);
+    await backdate("W-OLD", 3 * 3600); // over two hours: no longer worth asking
+    await backdate("W-PAID-OK", 300);
+    await backdate("W-PAID-NOSAPO", 300);
+    await backdate("W-FAILED", 300);
+    await ledgerRecordPayment("W-PAID-OK", "paid", PAID, db);
+    await ledgerRecordSapo("W-PAID-OK", { ok: true, id: 1, name: "#1" }, db);
+    await ledgerRecordPayment("W-PAID-NOSAPO", "paid", PAID, db);
+    await ledgerRecordPayment("W-FAILED", "failed", PAID, db);
+
+    const got = await ledgerSweepCandidates(50, db);
+    const mine = got
+      .filter((c) => c.txnRef.startsWith("W-"))
+      .map((c) => ({ txnRef: c.txnRef, kind: c.kind }))
+      .sort((x, y) => x.txnRef.localeCompare(y.txnRef));
+    expect(mine).toEqual([
+      { txnRef: "W-PAID-NOSAPO", kind: "unsynced" },
+      { txnRef: "W-PENDING", kind: "pending" },
+    ]);
+  });
+
+  it("returns nothing, rather than throwing, when the ledger is unreachable", async () => {
+    const broken = {
+      select: () => {
+        throw new Error("down");
+      },
+    } as never;
+    expect(await ledgerSweepCandidates(10, broken)).toEqual([]);
+  });
+});
+
+describe("ledgerPaidParams — what a Sapo retry is built from", () => {
+  it("gives the recorded transaction, bank, date and amount of a paid attempt, with response code 00", async () => {
+    await ledgerRecordCheckout(pending("PP-1"), db);
+    await ledgerRecordPayment("PP-1", "paid", PAID, db);
+    expect(await ledgerPaidParams("PP-1", db)).toEqual({
+      vnp_TxnRef: "PP-1",
+      vnp_ResponseCode: "00",
+      vnp_TransactionStatus: "00",
+      vnp_Amount: "8000000",
+      vnp_TransactionNo: "15697481",
+      vnp_BankCode: "NCB",
+      vnp_PayDate: "20261007134156",
+    });
+  });
+
+  it("gives nothing for an attempt that is pending, failed, cancelled, unknown, or paid without a transaction number", async () => {
+    await ledgerRecordCheckout(pending("PP-2"), db);
+    expect(await ledgerPaidParams("PP-2", db)).toBeUndefined(); // pending
+    await ledgerRecordPayment("PP-2", "failed", PAID, db);
+    expect(await ledgerPaidParams("PP-2", db)).toBeUndefined(); // failed
+    await ledgerRecordCheckout(pending("PP-3"), db);
+    await ledgerRecordPayment("PP-3", "cancelled", PAID, db);
+    expect(await ledgerPaidParams("PP-3", db)).toBeUndefined(); // cancelled
+    expect(await ledgerPaidParams("PP-NEVER", db)).toBeUndefined();
+    await ledgerRecordCheckout(pending("PP-4"), db);
+    await ledgerRecordPayment("PP-4", "paid", { vnp_ResponseCode: "00" }, db); // no transaction number
+    expect(await ledgerPaidParams("PP-4", db)).toBeUndefined();
+  });
+});
+
+describe("the sweep list's lower bound and order", () => {
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000);
+
+  it("leaves out a paid order younger than a minute (its IPN is still being processed) and lists newest first", async () => {
+    for (const r of ["Q-PAID-FRESH", "Q-PAID-OLD", "Q-PEND-OLDER", "Q-PEND-NEWER"]) await ledgerRecordCheckout(pending(r), db);
+    await db.update(schema.orders).set({ createdAt: ago(30) }).where(eq(schema.orders.webRef, "Q-PAID-FRESH"));
+    await db.update(schema.orders).set({ createdAt: ago(600) }).where(eq(schema.orders.webRef, "Q-PAID-OLD"));
+    await db.update(schema.orders).set({ createdAt: ago(900) }).where(eq(schema.orders.webRef, "Q-PEND-OLDER"));
+    await db.update(schema.orders).set({ createdAt: ago(120) }).where(eq(schema.orders.webRef, "Q-PEND-NEWER"));
+    await ledgerRecordPayment("Q-PAID-FRESH", "paid", PAID, db);
+    await ledgerRecordPayment("Q-PAID-OLD", "paid", PAID, db);
+    const mine = (await ledgerSweepCandidates(50, db)).filter((c) => c.txnRef.startsWith("Q-")).map((c) => c.txnRef);
+    expect(mine).toEqual(["Q-PEND-NEWER", "Q-PAID-OLD", "Q-PEND-OLDER"]); // newest first; the 30 s-old paid order is not listed
   });
 });
