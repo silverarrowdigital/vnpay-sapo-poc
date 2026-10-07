@@ -46,6 +46,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="vi" className={manrope.variable}>
+      <head>
+        {/* Product photographs come from Sapo's CDN, a second origin. Lighthouse (2026-10-07) put 1.5 s of the
+            LCP on /shop between the first byte and the start of the image request, most of it opening that
+            connection; connecting early removes it from the critical path. */}
+        <link rel="preconnect" href="https://bizweb.dktcdn.net" />
+      </head>
       {/* suppressHydrationWarning: browser extensions (e.g. ruttl) inject attributes on <body> before React hydrates */}
       <body suppressHydrationWarning className="bg-page font-body text-ink">
         <p className="bg-banner px-4 py-2 text-center text-[11px] tracking-wide text-page uppercase">
