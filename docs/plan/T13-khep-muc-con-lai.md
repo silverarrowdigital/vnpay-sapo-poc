@@ -1,6 +1,6 @@
 # T13 — Xử lý các mục còn mở trong doc tiến độ (kế hoạch ngày 2026-10-07)
 
-**Trạng thái (2026-10-07): T13.0, .2–.6, .8, .9 đã làm xong trong working tree, CHƯA commit, CHƯA deploy; .7 đã quyết định không đổi; .1, .10–.13 còn chờ.** Chủ shop đã chốt cả 6 câu "theo khuyến nghị". Xem mục "Kết quả" ở cuối file. (Phần bên dưới là kế hoạch gốc lúc 14:00, giữ nguyên.)
+**Trạng thái (2026-10-07, cuối ngày): T13.0, .2–.6, .8, .9 đã commit (0ad5ad7) và deploy; .1 đã chạy (trừ bước đóng đơn trong Sapo: Sapo hết hạn test); .10 và .11 đã đo (LCP của /shop và trang sản phẩm CHƯA đạt); .12 và .13 đã xong (xem T14); .7 đã quyết định không đổi.** Chi tiết ở mục "Cập nhật cuối ngày" cuối file. Chủ shop đã chốt cả 6 câu "theo khuyến nghị". Xem mục "Kết quả" ở cuối file. (Phần bên dưới là kế hoạch gốc lúc 14:00, giữ nguyên.)
 
 ~~Trạng thái cũ: chỉ mới là kế hoạch.~~ Chờ bạn trả lời mục "Cần bạn
 chốt" (nói "theo khuyến nghị" là đủ) và nói "bắt đầu T13".
@@ -136,3 +136,31 @@ chứng chạy thật, kèm comment commit + cách kiểm. **Push = deploy produ
 - **T13.1** ba lần trả tiền thử (một đơn production với code mới, một lần hủy ở VNPAY, một lần hoàn tiền) — cần deploy và bạn nhập thẻ test.
 - **T13.10** kiểm layout 390px, **T13.11** đo Core Web Vitals, **T13.13** kế hoạch Postgres (T14).
 - Chưa có điều gì ở T13.0 được kiểm trên production.
+
+### Cập nhật cuối ngày 2026-10-07 (số đo thật)
+
+Các commit từ lần cập nhật tài liệu trước: `4dc5561`, `b77bdab`, `1a08143` (menu), `25e3d03` (kế hoạch T14 và nhãn trạng thái 11 của querydr). Các mục "Chưa làm" ở trên đã được làm như sau.
+
+**T13.1 — ba lần trả tiền thử trên sandbox.** Chạy trên `next dev` ở máy (không phải production): VNPAY sandbox và Sapo là thật, nhưng `APP_BASE_URL` là localhost nên VNPAY không gửi được IPN, `watch:ipn` không chạy, kho đơn chờ nằm trong bộ nhớ.
+
+- **(a) Thiếu IPN được cứu.** Đơn mã `20261007173115WXDSJYNYZ2ZWEFEC` (Test Product 2, 80.000₫): VNPAY trả `00`, không có IPN. Khoảng 5 phút sau, một lần mở `/success` (do lệnh `curl` gây ra, vì tab của khách chỉ gửi một request) đã chạy đường querydr: log `querydr.paid_without_ipn` (`ageSeconds` 588) → `sapo.order_created` → `querydr.settled`; đơn Sapo #1041, đã thanh toán, 80.000. Cùng một yêu cầu gửi hai lần với một `Idempotency-Key` trả cùng một mã đơn (log `checkout.replayed`). Như vậy T13.0 và T13.4 chạy được với VNPAY/Sapo thật, nhưng **mới ở máy, chưa trên production**.
+- **(b) Hoàn tiền thật đầu tiên của repo.** `npm run refund -- <mã> --confirm`: VNPAY trả `vnp_ResponseCode 00`, "Refund success", `vnp_TransactionType 02`, `vnp_TransactionStatus 05`. Script đúng thiết kế là không ghi gì vào Sapo; đơn #1041 sau đó được xoá theo id (HTTP 200). Chạy `querydr` ngay sau đó nhận mã `94` (trùng trong khoảng thời gian của API), nên **chưa biết** querydr trả lời gì cho một giao dịch đã hoàn. Mới thử hoàn toàn bộ; hoàn một phần (`03`) chưa thử.
+- **(c) Huỷ.** Đơn mã `202610071741375DM4V1VF5ZTGV9AX`: VNPAY trả mã `24`; `/success` hiện "Đã huỷ thanh toán… Không có đơn hàng nào được tạo"; Sapo có 0 đơn cho tag đó; `querydr` trả `ResponseCode 00` với `vnp_TransactionStatus 11` (đã huỷ; nhãn mới thêm vào `scripts/querydr.mjs`). Không có đơn nào được tạo.
+- **Chưa làm:** kiểm một đơn thực sự đã đóng/huỷ trong Sapo có được tìm thấy bởi lần tra ba trạng thái hay không. Gói dùng thử Sapo của chủ shop đã hết hạn và chưa có endpoint đã xác minh để đóng/huỷ đơn từ đây, nên mục này vẫn dựa vào unit test và số đo `status=closed` / `status=cancelled` trả 200 với 0 đơn (không bị bỏ qua, vì danh sách không lọc có 22 đơn).
+- **Trên production, chỉ đọc:** đơn #1040 (thanh toán của chính chủ shop, mã kiểu mới, IPN đến sau 4 giây) tra được bằng `POST /api/order-lookup` với đúng số điện thoại (chấp nhận mã viết thường và dạng `+84`); sai số điện thoại trả cùng một 404. `fulfillmentStatus` của đơn là undefined, hiển thị "Chưa giao hàng" cho đơn đang mở.
+
+**T13.10 — layout điện thoại.** Giả lập điện thoại 390px qua Chrome DevTools Protocol (Chromium không giao diện, không thêm thư viện) trên 9 trang production (`/`, `/shop`, một sản phẩm, `/ve-chung-toi`, `/lien-he`, `/blog`, một trang chính sách, `/checkout`, `/tra-cuu-don`): không trang nào cuộn ngang (`scrollWidth` = 390 ở cả 9). Tìm ra một lỗi thật, sửa ở commit `1a08143`: khung menu khi mở bắt đầu giữa màn hình và tràn khoảng 100px ra mép phải; sau khi sửa, bản production build chạy ở máy không còn phần tử nào vượt mép. Mỗi trang có 9–13 link/nút nhỏ hơn 24px ở một chiều — **chưa tìm hiểu**.
+
+**T13.11 — Lighthouse 13.5 (điện thoại, giả lập băng thông), production, 2 lần mỗi trang.**
+
+| Trang | LCP | CLS | TBT |
+|---|---|---|---|
+| `/` | 1,6–2,1 s | 0 | 90–480 ms |
+| `/shop` | 3,4–3,6 s | 0–0,03 | — |
+| Trang sản phẩm | 3,1–3,6 s | 0 | — |
+
+Điểm Performance 82–98. **Mục tiêu LCP ≤ 2,5 s CHƯA đạt ở `/shop` và trang sản phẩm.** INP không đo được trong phòng thí nghiệm (TBT chỉ là số thay thế). Phân tích LCP: ~250 ms đến byte đầu tiên, ~1,4 s chờ tải tài nguyên, ~0,4–0,9 s tải. Yêu cầu tải ảnh chỉ bắt đầu khi HTML (đang stream) xong, khoảng 1,67 s, vì trang phải chờ danh sách sản phẩm từ Sapo (~1,4 s) mới viết được thẻ `<img>`. Ảnh nhỏ (~40 KB, webp) nên không phải nguyên nhân. Đã thử nhưng không có tác dụng: `eager` + `fetchpriority=high` cho ảnh đầu trang (commit `b77bdab`) và `<link rel="preconnect" href="https://bizweb.dktcdn.net">` (commit `4dc5561`). Cách còn lại là lưu tạm danh sách sản phẩm Sapo cho các trang danh sách trong vài chục giây, nhưng việc đó mâu thuẫn với "giá và tồn kho không bao giờ cũ" và với "sản phẩm mới tạo trong Sapo hiện ngay ở lần tải kế tiếp". **Đây là quyết định của chủ shop, chưa chốt.**
+
+**T13.12 — hạn mức API Sapo.** Header trả về `x-sapo-api-call-limit: 1/40` và `x-bizweb-api-call-limit` (thùng 40 lượt gọi). `GET /admin/shop.json` không trả tên gói, nên **gói Sapo vẫn chưa biết** (chủ shop nói gói dùng thử đã hết hạn).
+
+**T13.13 — đã viết** thành `docs/plan/T14-so-giao-dich-postgres.md` (PR 4–6: schema, ghi song song, IPN + outbox + worker). Bị chặn cho tới khi chủ tài khoản Vercel bật Neon. T13.7 giữ nguyên theo quyết định.
