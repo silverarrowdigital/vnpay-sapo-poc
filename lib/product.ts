@@ -113,10 +113,9 @@ export interface ProductGroup {
 
 /**
  * A product the shop created to try the checkout with ("TEST Size Picker", "Test Product 1–4").
- * Matched by name — a leading "test" word — because Sapo has no flag for it and the shop does not
- * have to remember to set one. Such a product is left out of every **listing** (home, shop,
- * sitemap) and its page is `noindex`, but it stays buyable by its direct link, so the checkout can
- * still be tried (T12, question 6). Not a security measure: the link works for anyone who has it.
+ * Matched by name — a leading "test" word — because Sapo has no flag for it. Such a product is listed
+ * and sold like any other (the shop mirrors Sapo, owner's decision 2026-10-07); it is only kept out
+ * of search engines: left out of the sitemap, and its page is `noindex`.
  */
 export function isTestProduct(name: string): boolean {
   return /^test(\s|$)/i.test(name.trim());

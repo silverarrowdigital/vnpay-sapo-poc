@@ -3,7 +3,7 @@ import Link from "next/link";
 import { unstable_cache } from "next/cache";
 import ProductTile from "@/components/ProductTile";
 import { listPosts } from "@/lib/blog";
-import { getListedProducts } from "@/lib/catalog";
+import { getStorefrontProducts } from "@/lib/catalog";
 import {
   BEST_SELLER_COUNT,
   BEST_SELLER_PRODUCT_IDS,
@@ -53,7 +53,7 @@ function pickBestSellers(listed: ProductGroup[]): ProductGroup[] {
 export default async function HomePage() {
   let bestSellers: ProductGroup[] | null = null;
   try {
-    bestSellers = pickBestSellers(await getListedProducts());
+    bestSellers = pickBestSellers(await getStorefrontProducts());
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
   }

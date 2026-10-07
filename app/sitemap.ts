@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 import { allPostSlugs } from "@/lib/blog";
-import { getListedProducts } from "@/lib/catalog";
+import { getIndexableProducts } from "@/lib/catalog";
 import { getAppBaseUrl } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
 import { POLICIES } from "@/lib/policies";
@@ -33,7 +33,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   try {
     // One URL per product, however many sizes it has — the sizes are query parameters on it.
-    for (const group of await getListedProducts()) {
+    for (const group of await getIndexableProducts()) {
       entries.push({
         url: `${base}${productHref(defaultVariant(group))}`,
         lastModified: new Date(),

@@ -15,7 +15,7 @@
  * Without Sapo credentials at all there is nothing to read, so `getDisplayProduct` still answers
  * from the hardcoded `PRODUCT` with stock untracked.
  */
-import { getSapoConfig, showTestProducts } from "./config";
+import { getSapoConfig } from "./config";
 import { log } from "./log";
 import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from "./sapo";
 import { PRODUCT, isTestProduct, type CatalogProduct, type DisplayProduct, type ProductGroup } from "./product";
@@ -132,14 +132,16 @@ export async function getStorefrontProducts(): Promise<ProductGroup[]> {
 }
 
 /**
- * What the listings show: `getStorefrontProducts` without the shop's own test products (see
- * `isTestProduct`). Home, shop and sitemap read this; the product page and checkout still read the
- * full list, so a test product stays reachable by its link. `SHOW_TEST_PRODUCTS=true` brings them
- * back in the listings on a development machine only (see `showTestProducts`).
+ * What the sitemap offers to search engines: `getStorefrontProducts` without the shop's own test
+ * products (see `isTestProduct`).
+ *
+ * **Only the sitemap.** The home page and /shop list exactly what Sapo has — every active, priced,
+ * non-combo product — because the owner decided on 2026-10-07 that the storefront must mirror Sapo,
+ * so a product created there appears and can be bought on the next request. Keeping test products out
+ * of search results does not change what a customer sees.
  */
-export async function getListedProducts(): Promise<ProductGroup[]> {
-  const all = await getStorefrontProducts();
-  return showTestProducts() ? all : all.filter((g) => !isTestProduct(g.name));
+export async function getIndexableProducts(): Promise<ProductGroup[]> {
+  return (await getStorefrontProducts()).filter((g) => !isTestProduct(g.name));
 }
 
 /**

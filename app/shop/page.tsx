@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import ProductTile from "@/components/ProductTile";
 import { OPEN_GRAPH } from "@/lib/business";
-import { getListedProducts } from "@/lib/catalog";
+import { getStorefrontProducts } from "@/lib/catalog";
 import { errorMessage, log } from "@/lib/log";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -15,7 +15,8 @@ export const metadata: Metadata = {
 
 /**
  * The catalog (T12.2) — what the home page was until the design's landing page took that place.
- * One tile per Sapo product, three columns, the shop's own test products left out of the list.
+ * One tile per Sapo product, three columns, every product Sapo sells — the shop mirrors Sapo (owner's
+ * decision, 2026-10-07), so a product created there is listed on the next request.
  *
  * The design's sort control is not drawn: nothing would order the list, and a control that does
  * nothing is worse than none (the previous catalog page drew one for fidelity; this one does not).
@@ -23,7 +24,7 @@ export const metadata: Metadata = {
 export default async function ShopPage() {
   let products;
   try {
-    products = await getListedProducts();
+    products = await getStorefrontProducts();
   } catch (err) {
     log.error("catalog.unavailable", { error: errorMessage(err) });
     return (

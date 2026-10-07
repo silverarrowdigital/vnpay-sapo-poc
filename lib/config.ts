@@ -209,16 +209,6 @@ export function isIndexableDeployment(): boolean {
   return env === undefined || env === "production";
 }
 
-/**
- * Whether the listings show the shop's own test products (`SHOW_TEST_PRODUCTS=true` in
- * `.env.local`, for looking at a layout with more than one tile). Honoured **only outside
- * production**: `NODE_ENV` is "production" for `next start` and for every Vercel deployment, so the
- * variable set by mistake in the Vercel dashboard changes nothing there.
- */
-export function showTestProducts(): boolean {
-  return process.env.NODE_ENV !== "production" && process.env.SHOW_TEST_PRODUCTS === "true";
-}
-
 export interface AlertConfig {
   apiKey: string;
   /** Who is told. The shop owner's own address — never a customer's. */

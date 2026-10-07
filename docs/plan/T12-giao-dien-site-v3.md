@@ -18,8 +18,9 @@ nhảy cấp ở `/shop` (h3 dưới h1), cỡ chữ px gõ cứng, màu hero.
 - `/` là trang chủ mới, danh mục chuyển sang `/shop`. Câu sức khỏe/FDA ẩn bằng công tắc `SHOW_HEALTH_CLAIMS = false`
   (`lib/home.ts`); logo đối tác ẩn khi `PARTNER_LOGOS` rỗng; "bán chạy" lấy 4 sản phẩm còn hàng đầu tiên khi
   `BEST_SELLER_PRODUCT_IDS` rỗng.
-- Sản phẩm test (tên bắt đầu bằng chữ "test", không phân biệt hoa thường) ẩn khỏi `/`, `/shop`, sitemap; trang của chúng vẫn mở
-  bằng link và có `noindex`; giỏ cũ chứa chúng vẫn thanh toán được (đường tiền không đổi).
+- Sản phẩm test: T12 từng ẩn chúng khỏi `/`, `/shop`, sitemap. **Đổi ngày 2026-10-07 theo quyết định của chủ shop:** cửa
+  hàng phản ánh đúng Sapo, nên `/` và `/shop` hiện mọi sản phẩm đang bán, kể cả sản phẩm test. Chúng chỉ còn bị loại khỏi
+  sitemap và có `noindex`. Câu 6 bên dưới vì thế không còn áp dụng cho phần hiển thị.
 - `/ve-chung-toi`, `/lien-he`, `/chinh-sach/*`, `/blog`, `/blog/[slug]` (thêm "Các bài viết liên quan"), trang sản phẩm đã đổi giao diện;
   nội dung và dữ liệu giữ nguyên. `/ve-chung-toi` thêm mục "Sản phẩm The Hour" (bỏ câu sức khỏe/chứng nhận) và hai đoạn về người
   sáng lập (bỏ "an toàn tuyệt đối").
