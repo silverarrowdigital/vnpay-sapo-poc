@@ -99,7 +99,7 @@ export default function CartMenu() {
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="cursor-pointer border-0 bg-transparent p-0 font-body text-[12px] tracking-wider uppercase text-ink"
+        className="cursor-pointer border-0 bg-transparent p-0 font-body text-[12px] leading-4 font-medium tracking-wider uppercase text-ink"
       >
         {/* Zero on the server and until hydration reads storage, which is the truth as far as the server knows. */}
         Cart ({count})

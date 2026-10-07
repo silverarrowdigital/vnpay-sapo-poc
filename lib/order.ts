@@ -802,6 +802,8 @@ export const RATE_POLICIES = {
    * timestamp second), so a sweep is hopeless whatever this number is.
    */
   result: { limit: 120, windowSeconds: 600 },
+  /** The contact form, per IP: every send is a real email in the owner's inbox. */
+  contact: { limit: 5, windowSeconds: 3600 },
 } as const satisfies Record<string, RatePolicy>;
 
 /**

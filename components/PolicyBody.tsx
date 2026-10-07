@@ -7,18 +7,18 @@
  */
 export default function PolicyBody({ lines }: { lines: string[] }) {
   return (
-    <div className="grid gap-3 text-sm leading-relaxed">
+    <div className="grid gap-4 text-lg leading-7">
       {lines.map((line, i) => {
         if (/^\d+\.\d+\.\s/.test(line)) {
           return (
-            <h3 key={i} className="mt-4 mb-0 text-base font-medium">
+            <h3 key={i} className="mt-2 mb-0 text-[22px] leading-[30px] font-normal">
               {line}
             </h3>
           );
         }
         if (/^\d+\.\s/.test(line) && line.length < 120) {
           return (
-            <h2 key={i} className="font-display mt-8 mb-0 text-xl font-normal">
+            <h2 key={i} className="mt-6 mb-0 text-[30px] leading-[38px] font-normal">
               {line}
             </h2>
           );

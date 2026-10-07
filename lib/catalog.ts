@@ -18,7 +18,7 @@
 import { getSapoConfig } from "./config";
 import { log } from "./log";
 import { fetchCatalogEntries, fetchCatalogEntry, type SapoCatalogEntry } from "./sapo";
-import { PRODUCT, type CatalogProduct, type DisplayProduct, type ProductGroup } from "./product";
+import { PRODUCT, isTestProduct, type CatalogProduct, type DisplayProduct, type ProductGroup } from "./product";
 
 /**
  * What may be sold at all: a variant with a real price that is not a combo. Two rules, one gate —
@@ -129,6 +129,15 @@ export async function getStorefrontProducts(): Promise<ProductGroup[]> {
     }
   }
   return [...groups.values()];
+}
+
+/**
+ * What the listings show: `getStorefrontProducts` without the shop's own test products (see
+ * `isTestProduct`). Home, shop and sitemap read this; the product page and checkout still read the
+ * full list, so a test product stays reachable by its link.
+ */
+export async function getListedProducts(): Promise<ProductGroup[]> {
+  return (await getStorefrontProducts()).filter((g) => !isTestProduct(g.name));
 }
 
 /**

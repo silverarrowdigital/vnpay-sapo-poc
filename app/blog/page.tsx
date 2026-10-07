@@ -4,12 +4,20 @@ import { unstable_cache } from "next/cache";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { POSTS_PER_PAGE, listPosts } from "@/lib/blog";
+import { OPEN_GRAPH } from "@/lib/business";
 import { errorMessage, log } from "@/lib/log";
 
-export const metadata: Metadata = {
-  title: "Blog",
-  description: "Bài viết về trà và cách thưởng thức.",
-};
+/** Each page of the list is its own address: page 2 must not declare page 1 its canonical. */
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }): Promise<Metadata> {
+  const page = readPage((await searchParams).page);
+  const url = page === 1 ? "/blog" : `/blog?page=${page}`;
+  return {
+    title: "Blog",
+    description: "Bài viết về trà và cách thưởng thức.",
+    alternates: { canonical: url },
+    openGraph: { ...OPEN_GRAPH, title: "Blog", url },
+  };
+}
 
 /**
  * Cached for an hour, not the five minutes product content gets.
@@ -34,6 +42,10 @@ function readPage(value: string | string[] | undefined): number {
   return Number.isSafeInteger(n) && n >= 1 ? n : 1;
 }
 
+/**
+ * The blog index (T12.4), in the layout of design/site-v3/blogs.html: a page heading, a three-column
+ * grid of cards (3:2 cover, "author | date", title) and a pager. The posts themselves are unchanged.
+ */
 export default async function BlogIndexPage({ searchParams }: { searchParams: SearchParams }) {
   const page = readPage((await searchParams).page);
 
@@ -46,8 +58,8 @@ export default async function BlogIndexPage({ searchParams }: { searchParams: Se
     // This is the opposite of a product page, which degrades to Sapo's own description.
     log.error("blog.unavailable", { error: errorMessage(err) });
     return (
-      <div className="mx-auto w-full max-w-[1416px] px-4 py-24">
-        <h1 className="font-display text-3xl font-normal">Không đọc được bài viết</h1>
+      <div className="mx-auto w-full max-w-[1416px] px-4 py-24 lg:px-10">
+        <h1 className="m-0 text-3xl font-normal">Không đọc được bài viết</h1>
         <p className="mt-3 text-sm text-ink-soft">Hệ thống nội dung đang không phản hồi. Vui lòng thử lại sau.</p>
       </div>
     );
@@ -57,72 +69,66 @@ export default async function BlogIndexPage({ searchParams }: { searchParams: Se
   if (page > lastPage && total > 0) notFound();
 
   return (
-    <>
-      {/* Full-bleed hero band. The reference uses a photograph here; this is the ink tone from the
-          token set until the CMS supplies one. */}
-      <section className="flex min-h-[320px] items-center justify-center bg-ink px-4 py-20 lg:min-h-[420px]">
-        <h1 className="font-display m-0 text-center text-[clamp(2.5rem,6vw,4.5rem)] leading-tight font-normal text-white">
-          Nhâm nhi <em className="italic">và đọc</em>
-        </h1>
-      </section>
-
-      <div className="mx-auto w-full max-w-[1416px] px-4">
-        <hr className="mt-14 mb-12 border-0 border-t border-line" />
-
-        {posts.length === 0 ? (
-          <p className="py-10 text-sm text-ink-soft">Chưa có bài viết nào.</p>
-        ) : (
-          <ul className="grid list-none grid-cols-1 gap-x-8 gap-y-12 p-0 sm:grid-cols-2 lg:grid-cols-3">
-            {posts.map((post) => (
-              <li key={post.slug}>
-                <Link href={`/blog/${post.slug}`} className="group block no-underline">
-                  <div className="relative aspect-[16/10] overflow-hidden rounded-xl bg-cream">
-                    {post.cover !== null && (
-                      <Image
-                        src={post.cover.url}
-                        alt={post.cover.alt}
-                        fill
-                        sizes="(min-width: 1024px) 440px, (min-width: 640px) 50vw, 100vw"
-                        className="object-cover"
-                      />
-                    )}
-                  </div>
-                  <p className="mt-4 mb-2 text-xs text-ink-soft">
-                    {post.authorName ?? "The Hour Tea"} <span aria-hidden="true">|</span>{" "}
-                    {formatPostDate(post.publishedAt)}
-                  </p>
-                  <h2 className="font-display m-0 line-clamp-2 text-xl leading-snug font-normal group-hover:underline">
-                    {post.title}
-                  </h2>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {lastPage > 1 && (
-          <nav aria-label="Phân trang" className="mt-16 mb-4 flex items-center justify-between gap-4 text-sm">
-            {page > 1 ? (
-              <Link href={page === 2 ? "/blog" : `/blog?page=${page - 1}`} rel="prev" className="no-underline">
-                ← Trang trước
-              </Link>
-            ) : (
-              <span />
-            )}
-            <span className="font-mono text-xs text-ink-soft">
-              {page} / {lastPage}
-            </span>
-            {page < lastPage ? (
-              <Link href={`/blog?page=${page + 1}`} rel="next" className="no-underline">
-                Tiếp theo →
-              </Link>
-            ) : (
-              <span />
-            )}
-          </nav>
-        )}
+    <div className="mx-auto w-full max-w-[1416px] px-4 lg:px-10">
+      <div className="py-[clamp(48px,5vw,96px)]">
+        <h1 className="m-0 text-[clamp(2.125rem,3.6vw,3rem)] leading-[1.3] font-normal">Nhâm nhi và đọc</h1>
       </div>
-    </>
+
+      {posts.length === 0 ? (
+        <p className="py-10 text-ink-soft">Chưa có bài viết nào.</p>
+      ) : (
+        <ul className="m-0 grid list-none grid-cols-1 gap-x-12 gap-y-16 p-0 min-[520px]:grid-cols-2 lg:grid-cols-3">
+          {posts.map((post) => (
+            <li key={post.slug}>
+              <Link href={`/blog/${post.slug}`} className="group grid content-start gap-4 text-ink no-underline">
+                <div className="relative aspect-[3/2] overflow-hidden rounded-sm bg-placeholder">
+                  {post.cover !== null && (
+                    <Image
+                      src={post.cover.url}
+                      alt={post.cover.alt}
+                      fill
+                      sizes="(min-width: 1024px) 440px, (min-width: 520px) 50vw, 100vw"
+                      className="object-cover"
+                    />
+                  )}
+                </div>
+                <p className="m-0 text-[12px] leading-4 font-medium tracking-wider text-ink-soft uppercase">
+                  {post.authorName ?? "The Hour Tea"} <span aria-hidden="true">|</span> {formatPostDate(post.publishedAt)}
+                </p>
+                <h2 className="m-0 line-clamp-3 text-[22px] leading-[30px] font-normal group-hover:underline">{post.title}</h2>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {lastPage > 1 && (
+        <nav aria-label="Phân trang" className="mt-12 flex items-center justify-center gap-6 pb-[clamp(64px,6vw,112px)] text-sm">
+          {page > 1 && (
+            <Link
+              href={page === 2 ? "/blog" : `/blog?page=${page - 1}`}
+              rel="prev"
+              className="inline-flex min-h-[52px] items-center rounded-sm border border-ink px-6 text-ink no-underline"
+            >
+              Trang trước
+            </Link>
+          )}
+          <span className="text-xs text-ink-soft tabular-nums">
+            {page} / {lastPage}
+          </span>
+          {page < lastPage && (
+            <Link
+              href={`/blog?page=${page + 1}`}
+              rel="next"
+              className="inline-flex min-h-[52px] items-center rounded-sm border border-ink px-6 text-ink no-underline"
+            >
+              Tiếp theo
+            </Link>
+          )}
+        </nav>
+      )}
+      {lastPage <= 1 && <div className="pb-[clamp(64px,6vw,112px)]" />}
+    </div>
   );
 }
 

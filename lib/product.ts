@@ -111,6 +111,17 @@ export interface ProductGroup {
   variants: CatalogProduct[];
 }
 
+/**
+ * A product the shop created to try the checkout with ("TEST Size Picker", "Test Product 1–4").
+ * Matched by name — a leading "test" word — because Sapo has no flag for it and the shop does not
+ * have to remember to set one. Such a product is left out of every **listing** (home, shop,
+ * sitemap) and its page is `noindex`, but it stays buyable by its direct link, so the checkout can
+ * still be tried (T12, question 6). Not a security measure: the link works for anyone who has it.
+ */
+export function isTestProduct(name: string): boolean {
+  return /^test(\s|$)/i.test(name.trim());
+}
+
 /** The size picker appears only when there is something to pick between. */
 export function hasChoice(g: ProductGroup): boolean {
   // Every variant needs a label: pills with nothing written on them are not a choice.

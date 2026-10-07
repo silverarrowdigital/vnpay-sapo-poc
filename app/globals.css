@@ -50,6 +50,15 @@
      hỏng chữ trên từng nút một. Mực trên hổ phách đạt 9.16:1. */
   --color-primary-fg: #0b1012;
 
+  /* Grey boxes standing in for photographs not yet supplied (T12, from design/site-v3/styles.css),
+     and the two colour fields behind the home hero. Placeholders only: each becomes an image. */
+  --color-placeholder: #e3ded6;
+  --color-placeholder-2: #d6d0c5;
+  --color-placeholder-3: #c9c1b3;
+  --color-placeholder-dark: #1d2528;
+  --color-hero-a: #7c6a55;
+  --color-hero-b: #a67c2c;
+
   /* Hình học lưới sản phẩm, đo bằng cách dò biên tile trên ảnh ref
      (scratchpad/layout.mjs): 3 cột rộng 328px, khe 16px. */
   --spacing-tile: 328px;
@@ -133,7 +142,11 @@ body {
   font-size: var(--step-1);
   line-height: 1.5;
 }
-a { color: var(--accent); }
+/* In the base layer so a utility on the element (text-ink, text-primary-fg) wins: an unlayered rule
+   beats every Tailwind utility and painted the new header, buttons and tiles amber (T12.2). */
+@layer base {
+  a { color: var(--accent); }
+}
 
 /* Viền focus nhìn thấy được trên mọi nền; :focus-visible nên chuột không thấy. */
 :focus-visible {
@@ -580,4 +593,21 @@ dl.kv dd { margin: 0; word-break: break-all; font-family: var(--font-mono); }
   a[href]::after {
     content: "";
   }
+}
+
+/* ---- Home marquee (T12.2) -------------------------------------------------
+   The track holds the word list four times; sliding it a quarter of its width
+   and starting over is seamless. A reader who asked for less motion gets the
+   list as a horizontally scrollable row instead. */
+@keyframes marquee-slide {
+  to { transform: translateX(-25%); }
+}
+.marquee-track { animation: marquee-slide 44s linear infinite; }
+/* WCAG 2.2.2: anything that moves for more than five seconds can be paused. */
+.marquee:hover .marquee-track,
+.marquee:focus-within .marquee-track,
+.marquee:focus .marquee-track { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .marquee { overflow-x: auto; }
+  .marquee-track { animation: none !important; }
 }

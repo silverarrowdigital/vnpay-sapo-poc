@@ -32,7 +32,7 @@ export default function AddToCartForm({
       <button
         type="button"
         disabled
-        className="mt-8 w-full cursor-not-allowed rounded-full border border-line bg-transparent px-6 py-4 text-sm tracking-wide uppercase opacity-60"
+        className="mt-8 w-full cursor-not-allowed rounded-sm border border-line bg-transparent px-6 py-4 text-sm tracking-wide uppercase opacity-60"
       >
         Hết hàng
       </button>
@@ -47,13 +47,13 @@ export default function AddToCartForm({
   return (
     <div className="mt-8">
       <div className="flex flex-wrap items-stretch gap-3">
-        <div className="flex items-center rounded-full border border-line">
+        <div className="flex items-center rounded-sm border border-line">
           <button
             type="button"
             aria-label="Giảm số lượng"
             disabled={capped <= 1}
             onClick={() => setQuantity(Math.max(1, capped - 1))}
-            className="h-12 w-12 cursor-pointer rounded-full border-0 bg-transparent text-lg disabled:opacity-40"
+            className="h-12 w-12 cursor-pointer rounded-sm border-0 bg-transparent text-lg disabled:opacity-40"
           >
             −
           </button>
@@ -65,7 +65,7 @@ export default function AddToCartForm({
             aria-label="Tăng số lượng"
             disabled={capped >= room}
             onClick={() => setQuantity(Math.min(room, capped + 1))}
-            className="h-12 w-12 cursor-pointer rounded-full border-0 bg-transparent text-lg disabled:opacity-40"
+            className="h-12 w-12 cursor-pointer rounded-sm border-0 bg-transparent text-lg disabled:opacity-40"
           >
             +
           </button>
@@ -79,7 +79,7 @@ export default function AddToCartForm({
             setAdded(true);
             window.setTimeout(() => setAdded(false), 1600);
           }}
-          className="flex-1 cursor-pointer rounded-full border border-ink bg-transparent px-6 text-sm tracking-wide uppercase disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex-1 cursor-pointer rounded-sm border border-ink bg-transparent px-6 text-sm tracking-wide uppercase disabled:cursor-not-allowed disabled:opacity-50"
         >
           {full ? `Đã có tối đa ${max} trong giỏ` : added ? "Đã thêm ✓" : "Thêm vào giỏ hàng"}
         </button>
@@ -92,7 +92,7 @@ export default function AddToCartForm({
           add(variantId, capped);
           router.push("/checkout");
         }}
-        className="mt-3 w-full cursor-pointer rounded-full border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-3 w-full cursor-pointer rounded-sm border-0 bg-primary px-6 py-4 text-sm tracking-wide text-primary-fg uppercase disabled:cursor-not-allowed disabled:opacity-50"
       >
         Mua ngay
       </button>

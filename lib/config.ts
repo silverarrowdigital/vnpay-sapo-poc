@@ -237,6 +237,27 @@ export function getAlertConfig(): AlertConfig | undefined {
   return { apiKey, to, from: read("ALERT_EMAIL_FROM") ?? "Order alerts <onboarding@resend.dev>" };
 }
 
+export interface ContactConfig {
+  apiKey: string;
+  /** The shop's inbox for messages from the contact form. */
+  to: string;
+  from: string;
+}
+
+/**
+ * The contact form (T12.3). Needs the same Resend key as the order alerts plus its own recipient,
+ * `CONTACT_EMAIL_TO`: the owner has not chosen an inbox yet, and a form that sends nowhere is worse
+ * than none, so `undefined` here means **the form is not drawn at all** and the page shows only the
+ * contact details. A separate variable, not `ALERT_EMAIL_TO`, so that turning the form on is a
+ * deliberate choice of where customers' messages land.
+ */
+export function getContactConfig(): ContactConfig | undefined {
+  const apiKey = read("RESEND_API_KEY");
+  const to = read("CONTACT_EMAIL_TO");
+  if (apiKey === undefined || to === undefined || isPlaceholder(apiKey) || isPlaceholder(to)) return undefined;
+  return { apiKey, to, from: read("ALERT_EMAIL_FROM") ?? "Website <onboarding@resend.dev>" };
+}
+
 /**
  * Shared secret for Sanity's content webhook, which tells us to drop cached content.
  *

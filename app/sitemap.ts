@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 import { allPostSlugs } from "@/lib/blog";
-import { getStorefrontProducts } from "@/lib/catalog";
+import { getListedProducts } from "@/lib/catalog";
 import { getAppBaseUrl } from "@/lib/config";
 import { errorMessage, log } from "@/lib/log";
 import { POLICIES } from "@/lib/policies";
@@ -22,6 +22,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const entries: MetadataRoute.Sitemap = [
     { url: base, lastModified: new Date(), changeFrequency: "daily", priority: 1 },
+    { url: `${base}/shop`, lastModified: new Date(), changeFrequency: "daily", priority: 0.9 },
     { url: `${base}/blog`, lastModified: new Date(), changeFrequency: "weekly", priority: 0.8 },
     { url: `${base}/ve-chung-toi`, changeFrequency: "yearly", priority: 0.5 },
     { url: `${base}/lien-he`, changeFrequency: "yearly", priority: 0.5 },
@@ -32,7 +33,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   try {
     // One URL per product, however many sizes it has — the sizes are query parameters on it.
-    for (const group of await getStorefrontProducts()) {
+    for (const group of await getListedProducts()) {
       entries.push({
         url: `${base}${productHref(defaultVariant(group))}`,
         lastModified: new Date(),

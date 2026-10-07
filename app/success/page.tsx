@@ -208,7 +208,7 @@ export default async function ResultPage({ searchParams }: { searchParams: Searc
       )}
 
       <p className="mt-10 flex flex-wrap gap-6">
-        <Link href="/" className="text-sm">
+        <Link href="/shop" className="text-sm">
           ← Về trang sản phẩm
         </Link>
         <Link href="/tra-cuu-don" className="text-sm">
@@ -239,7 +239,7 @@ function RateLimited() {
         đơn ở trang tra cứu bằng mã giao dịch và số điện thoại. Nếu bạn đã thanh toán, đừng thanh toán lại.
       </p>
       <p className="mt-10 flex flex-wrap gap-6">
-        <Link href="/" className="text-sm">
+        <Link href="/shop" className="text-sm">
           ← Về trang sản phẩm
         </Link>
         <Link href="/tra-cuu-don" className="text-sm">

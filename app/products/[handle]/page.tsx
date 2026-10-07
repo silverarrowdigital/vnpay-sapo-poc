@@ -8,7 +8,7 @@ import { getProductByHandle } from "@/lib/catalog";
 import { getProductContent, type ProductMeta } from "@/lib/content";
 import { errorMessage, log } from "@/lib/log";
 import { OPEN_GRAPH } from "@/lib/business";
-import { defaultVariant, formatVnd, hasChoice, isSoldOut, maxOrderableQuantity, productHref, selectVariant } from "@/lib/product";
+import { defaultVariant, formatVnd, hasChoice, isSoldOut, isTestProduct, maxOrderableQuantity, productHref, selectVariant } from "@/lib/product";
 import { FREE_SHIPPING_THRESHOLD_VND } from "@/lib/shipping";
 
 export const dynamic = "force-dynamic"; // stock and price must never be served stale
@@ -89,6 +89,8 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
         title: product.name,
         description,
         alternates: { canonical: productHref(first) },
+        // The shop's own test products stay reachable by link but are kept out of search (T12, question 6).
+        ...(isTestProduct(product.name) ? { robots: { index: false, follow: true } } : {}),
         openGraph: {
           ...OPEN_GRAPH,
           title: product.name,
@@ -122,7 +124,7 @@ export default async function ProductDetailPage({
       <div className="mx-auto max-w-[1416px] px-4 py-16">
         <h1 className="font-display text-3xl">Không đọc được sản phẩm</h1>
         <p className="mt-3 text-sm text-ink-soft">Sapo đang không phản hồi. Vui lòng thử lại sau.</p>
-        <Link href="/" className="mt-6 inline-block text-sm">
+        <Link href="/shop" className="mt-6 inline-block text-sm text-ink">
           ← Về trang sản phẩm
         </Link>
       </div>
@@ -153,12 +155,12 @@ export default async function ProductDetailPage({
   const blocks = content?.blocks ?? [];
 
   return (
-    <div className="mx-auto w-full max-w-[1416px] px-4">
+    <div className="mx-auto w-full max-w-[1416px] px-4 lg:px-10">
       <nav aria-label="Breadcrumb" className="py-4 text-xs">
         <ol className="m-0 flex list-none flex-wrap gap-1 p-0">
           <li>
-            <Link href="/" className="no-underline hover:underline">
-              Trang chủ
+            <Link href="/shop" className="text-ink no-underline hover:underline">
+              Shop
             </Link>
           </li>
           <li aria-hidden="true" className="text-ink-soft">
@@ -173,7 +175,7 @@ export default async function ProductDetailPage({
         {/* The reference shows four images in a 2×2 grid here. Sapo returns one image per product,
             so this is a single frame; a Sanity imageSlider block carries any others in the content
             section below. */}
-        <div className="aspect-square overflow-hidden rounded-xl bg-cream">
+        <div className="aspect-square overflow-hidden rounded-sm bg-placeholder">
           {product.imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
             <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
@@ -184,7 +186,7 @@ export default async function ProductDetailPage({
 
         <div className="lg:sticky lg:top-8 lg:self-start">
           <p className="m-0 text-[11px] tracking-widest uppercase text-ink-soft">SKU {product.sku}</p>
-          <h1 className="font-display mt-2 mb-6 text-[clamp(2rem,4vw,3rem)] leading-[1.1] font-normal">
+          <h1 className="m-0 mt-2 mb-6 text-[clamp(1.875rem,3.2vw,3rem)] leading-[1.3] font-normal">
             {product.name}
           </h1>
 
@@ -206,7 +208,7 @@ export default async function ProductDetailPage({
                 {meta.benefits.map((b, i) => (
                   <li
                     key={`${b}-${i}`}
-                    className="rounded-full bg-primary px-3 py-1 text-[11px] tracking-wide text-primary-fg uppercase"
+                    className="rounded-sm bg-primary px-3 py-1 text-[11px] tracking-wide text-primary-fg uppercase"
                   >
                     {b}
                   </li>
@@ -226,8 +228,8 @@ export default async function ProductDetailPage({
                 {group.variants.map((v) => {
                   const selected = v.variantId === product.variantId;
                   const out = isSoldOut(v);
-                  const cls = `inline-block rounded-full border px-4 py-2 text-sm no-underline ${
-                    selected ? "border-ink bg-ink text-white" : "border-line text-ink"
+                  const cls = `inline-block rounded-sm border px-4 py-2 text-sm font-medium no-underline ${
+                    selected ? "border-primary bg-primary text-primary-fg" : "border-line text-ink"
                   } ${out ? "cursor-not-allowed opacity-40" : "hover:border-ink"}`;
                   return (
                     <li key={v.variantId}>
@@ -252,7 +254,7 @@ export default async function ProductDetailPage({
             </fieldset>
           )}
 
-          <p className="m-0 font-mono text-xl">
+          <p className="m-0 text-[30px] leading-[34px] tabular-nums">
             {formatVnd(product.priceVnd)}
             {product.compareAtPriceVnd !== undefined && (
               <span className="ml-3 text-base text-ink-soft line-through">

@@ -231,7 +231,7 @@ export default function CheckoutForm({
         <h2 className="font-display mb-3 text-2xl font-normal">Giỏ hàng đang trống</h2>
         <p className="mb-6 text-sm text-ink-soft">Hãy chọn một sản phẩm trước.</p>
         <Link
-          href="/"
+          href="/shop"
           className="inline-block rounded-full bg-primary px-6 py-3 text-sm tracking-wide text-primary-fg uppercase no-underline"
         >
           Xem sản phẩm

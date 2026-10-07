@@ -1,54 +1,69 @@
 import type { Metadata } from "next";
-import { BUSINESS } from "@/lib/business";
+import ContactForm from "@/components/ContactForm";
+import { BUSINESS, OPEN_GRAPH } from "@/lib/business";
+import { getContactConfig } from "@/lib/config";
+
+// The form appears only when an inbox is configured, and that is read from the environment per
+// request rather than frozen at build time.
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Liên hệ",
   description: `Liên hệ ${BUSINESS.brand}: hotline, email, địa chỉ và các kênh hỗ trợ.`,
   alternates: { canonical: "/lien-he" },
+  openGraph: { ...OPEN_GRAPH, title: "Liên hệ", url: "/lien-he" },
 };
 
 /**
- * The existing site has a B2B enquiry form here; this one has no form, because a form needs
- * somewhere to send to (an inbox or a service) that has not been chosen. The details below are what
- * the existing site publishes. Say so rather than draw a form that goes nowhere.
+ * Contact (T12.3), drawn from design/site-v3/contact.html. The design's heading and labels are in
+ * English ("Let's Talk", "Send Message") and are kept: they are the owner's own words.
+ *
+ * The enquiry form needs somewhere to send to. `CONTACT_EMAIL_TO` names that inbox; unset, the form
+ * is not drawn and the page is just the contact details, which is what it was before. A form that
+ * goes nowhere is worse than none.
  */
 export default function ContactPage() {
-  return (
-    <div className="mx-auto w-full max-w-[720px] px-4 py-12">
-      <h1 className="font-display mb-4 text-[clamp(1.75rem,4vw,2.75rem)] leading-tight font-normal">Liên hệ</h1>
-      <p className="mb-10 max-w-[55ch] text-sm leading-relaxed text-ink-soft">
-        Quý khách cần hỗ trợ về đơn hàng, hoặc muốn hợp tác quà tặng doanh nghiệp và trà nguyên liệu pha chế (B2B),
-        vui lòng liên hệ qua các kênh dưới đây.
-      </p>
+  const formEnabled = getContactConfig() !== undefined;
 
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-8 gap-y-4 text-sm">
-        <dt className="text-ink-soft">Hotline</dt>
-        <dd className="m-0">
-          <a href={`tel:${BUSINESS.hotline}`} className="text-ink underline">{BUSINESS.hotline}</a>
-          <span className="block text-xs text-ink-soft">{BUSINESS.hotlineHours}</span>
-        </dd>
-        <dt className="text-ink-soft">Email</dt>
-        <dd className="m-0">
-          <a href={`mailto:${BUSINESS.email}`} className="text-ink underline">{BUSINESS.email}</a>
-        </dd>
-        <dt className="text-ink-soft">Địa chỉ</dt>
-        <dd className="m-0">
+  return (
+    <div className="mx-auto grid w-full max-w-[1416px] gap-[clamp(32px,8vw,128px)] px-4 py-[clamp(48px,5vw,96px)] pb-[clamp(64px,6vw,112px)] lg:grid-cols-[minmax(0,608px)_minmax(0,800px)] lg:justify-between lg:px-10">
+      <div className="grid content-start gap-6">
+        <h1 lang="en" className="m-0 text-[clamp(2.125rem,4vw,3rem)] leading-[1.2] font-normal">
+          Let&apos;s Talk
+        </h1>
+        <p className="m-0">
+          Đối tác B2B hợp tác quà doanh nghiệp, trà nguyên liệu pha chế{formEnabled ? ", hãy điền vào form" : ", hãy liên hệ qua các kênh"} dưới
+          đây, The Hour sẽ liên hệ trong thời gian sớm nhất.
+        </p>
+        <p className="m-0 flex flex-wrap gap-6 text-[12px] leading-4 font-medium tracking-wider uppercase">
+          <a href={BUSINESS.facebook} rel="noopener noreferrer" className="text-ink">Facebook</a>
+          <a href={BUSINESS.instagram} rel="noopener noreferrer" className="text-ink">Instagram</a>
+          <a href={BUSINESS.tiktok} rel="noopener noreferrer" className="text-ink">TikTok</a>
+        </p>
+        <h2 lang="en" className="m-0 text-xl leading-[26px] font-normal">
+          Contact information:
+        </h2>
+        <p lang="en" className="m-0">
+          Please contact us in case of any questions, support and feedback via the following channels:
+        </p>
+        <p className="m-0">
+          Hotline:
+          <br />
+          <a href={`tel:${BUSINESS.hotline}`} className="text-ink">{BUSINESS.hotline}</a>
+          <br />({BUSINESS.hotlineHours})
+        </p>
+        <p className="m-0">
+          Email:
+          <br />
+          <a href={`mailto:${BUSINESS.email}`} className="text-ink">{BUSINESS.email}</a>
+        </p>
+        <p className="m-0">
           {BUSINESS.legalName}
-          <span className="block">{BUSINESS.address}</span>
-        </dd>
-        <dt className="text-ink-soft">Mạng xã hội</dt>
-        <dd className="m-0 flex flex-wrap gap-x-4">
-          <a href={BUSINESS.facebook} rel="noopener noreferrer" className="text-ink underline">
-            Facebook
-          </a>
-          <a href={BUSINESS.instagram} rel="noopener noreferrer" className="text-ink underline">
-            Instagram
-          </a>
-          <a href={BUSINESS.tiktok} rel="noopener noreferrer" className="text-ink underline">
-            TikTok
-          </a>
-        </dd>
-      </dl>
+          <br />
+          {BUSINESS.address}
+        </p>
+      </div>
+      {formEnabled && <ContactForm />}
     </div>
   );
 }

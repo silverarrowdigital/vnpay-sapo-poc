@@ -26,7 +26,7 @@ export default function ErrorPage({ error, retry }: { error: Error & { digest?: 
         >
           Thử lại
         </button>
-        <Link href="/" className="text-sm">
+        <Link href="/shop" className="text-sm">
           ← Về trang sản phẩm
         </Link>
         <Link href="/tra-cuu-don" className="text-sm">
