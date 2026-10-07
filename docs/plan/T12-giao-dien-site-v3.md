@@ -14,7 +14,7 @@ nhảy cấp ở `/shop` (h3 dưới h1), cỡ chữ px gõ cứng, màu hero.
 
 **Đã làm:**
 - Khung chung (`SiteHeader`, `SiteFooter`): footer không có form nhận tin và không có link Bộ Công Thương (câu 4, 11). Menu
-  "Chuyện của Trà" trỏ `/ve-chung-toi#san-pham`; không có link Search vì không có trang tìm kiếm.
+  mục "Chuyện của Trà" đã bị bỏ khỏi menu theo yêu cầu của bạn (2026-10-07); không có link Search vì không có trang tìm kiếm.
 - `/` là trang chủ mới, danh mục chuyển sang `/shop`. Câu sức khỏe/FDA ẩn bằng công tắc `SHOW_HEALTH_CLAIMS = false`
   (`lib/home.ts`); logo đối tác ẩn khi `PARTNER_LOGOS` rỗng; "bán chạy" lấy 4 sản phẩm còn hàng đầu tiên khi
   `BEST_SELLER_PRODUCT_IDS` rỗng.

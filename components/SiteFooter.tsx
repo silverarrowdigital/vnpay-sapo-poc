@@ -17,7 +17,6 @@ import { POLICY_LINKS } from "@/lib/policies";
 const MENU = [
   { href: "/", label: "Trang chủ" },
   { href: "/ve-chung-toi", label: "Chuyện của The Hour" },
-  { href: "/ve-chung-toi#san-pham", label: "Chuyện của Trà" },
   { href: "/shop", label: "Online Shop" },
   { href: "/lien-he", label: "Liên hệ" },
   { href: "/blog", label: "Blog" },

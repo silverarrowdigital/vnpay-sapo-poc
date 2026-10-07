@@ -160,7 +160,7 @@ export default function AboutPage() {
         </ol>
       </section>
 
-      {/* id: the menu's "Chuyện của Trà" lands here. */}
+      {/* id: an in-page anchor for the "Sản phẩm The Hour" section (the menu no longer links here). */}
       <section id="san-pham" aria-labelledby="ab-prod" className="mt-[clamp(48px,5vw,96px)] scroll-mt-8">
         <h2 id="ab-prod" className="m-0 mb-8 text-[clamp(1.75rem,3vw,2.25rem)] leading-[1.3] font-normal">
           Sản phẩm The Hour
