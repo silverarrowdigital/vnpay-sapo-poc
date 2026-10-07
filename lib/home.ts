@@ -13,6 +13,12 @@
 
 export const SHOW_HEALTH_CLAIMS = false;
 
+/**
+ * The "New Season, New Hour — 3 vị trà mới" block. **Off** (owner, 2026-10-07): the shop sells one
+ * product, so "three new teas" is untrue. Switch on, with the text edited, when there is a launch.
+ */
+export const SHOW_NEW_SEASON = false;
+
 /** Logos for the partners strip: `{ src, alt }`. Empty ⇒ the section is not drawn. */
 export const PARTNER_LOGOS: readonly { src: string; alt: string }[] = [];
 
@@ -23,6 +29,8 @@ export const PARTNER_LOGOS: readonly { src: string; alt: string }[] = [];
  */
 export const BEST_SELLER_PRODUCT_IDS: readonly number[] = [];
 export const BEST_SELLER_COUNT = 4;
+/** The best-sellers grid is drawn only when it can be filled: fewer products than this and it is left out. */
+export const BEST_SELLER_MIN = BEST_SELLER_COUNT;
 
 /**
  * Customer quotes for "Lan tỏa tình yêu trà". **Empty on purpose** (owner, 2026-10-07): the one quote in

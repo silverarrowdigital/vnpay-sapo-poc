@@ -6,11 +6,13 @@ import { listPosts } from "@/lib/blog";
 import { getCachedStorefrontProducts } from "@/app/listing-cache";
 import {
   BEST_SELLER_COUNT,
+  BEST_SELLER_MIN,
   BEST_SELLER_PRODUCT_IDS,
   HOME,
   MARQUEE_WORDS,
   PARTNER_LOGOS,
   SHOW_HEALTH_CLAIMS,
+  SHOW_NEW_SEASON,
   TESTIMONIALS,
 } from "@/lib/home";
 import { errorMessage, log } from "@/lib/log";
@@ -108,6 +110,7 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {SHOW_NEW_SEASON && (
       <section aria-labelledby="new-season" className="bg-ink text-page">
         <div className="mx-auto grid items-center gap-8 px-[clamp(16px,5vw,96px)] py-12 min-[760px]:grid-cols-2 min-[760px]:gap-16">
           <div role="img" aria-label="Sản phẩm mới" className={`${PH} aspect-[3/4] max-w-[560px] justify-self-center bg-placeholder-dark`} />
@@ -122,16 +125,16 @@ export default async function HomePage() {
           </div>
         </div>
       </section>
+      )}
 
-      <section aria-labelledby="best-sellers" className="px-[clamp(16px,5vw,96px)] py-[clamp(64px,6vw,112px)]">
-        <h2 id="best-sellers" className={`${H2} mb-14`}>
-          Các sản phẩm bán chạy
-        </h2>
+      <section aria-label="Sản phẩm" className="px-[clamp(16px,5vw,96px)] py-[clamp(64px,6vw,112px)]">
         {bestSellers === null ? (
           <p className="m-0 text-ink-soft">Chưa tải được sản phẩm. Vui lòng thử lại sau ít phút.</p>
-        ) : bestSellers.length === 0 ? (
-          <p className="m-0 text-ink-soft">Cửa hàng chưa có sản phẩm nào đang bán.</p>
-        ) : (
+        ) : bestSellers.length < BEST_SELLER_MIN ? null : (
+          <>
+          <h2 id="best-sellers" className={`${H2} mb-14`}>
+            Các sản phẩm bán chạy
+          </h2>
           <ul className="m-0 grid list-none grid-cols-1 gap-x-8 gap-y-12 p-0 min-[520px]:grid-cols-2 lg:grid-cols-4">
             {bestSellers.map((g, i) => (
               // The design staggers the four columns downward; only on a wide screen, where there are four.
@@ -140,8 +143,9 @@ export default async function HomePage() {
               </li>
             ))}
           </ul>
+          </>
         )}
-        <div className="mt-16 flex justify-center">
+        <div className={bestSellers !== null && bestSellers.length >= BEST_SELLER_MIN ? "mt-16 flex justify-center" : "flex justify-center"}>
           <Link href="/shop" className={BTN}>
             Shop Tất Cả Sản Phẩm
           </Link>

@@ -234,7 +234,7 @@ export interface AlertConfig {
    * Sender. Defaults to Resend's shared test sender (`onboarding@resend.dev`), so that no sending
    * domain has to be verified just to tell the owner something. **Unverified here:** that Resend
    * delivers from that sender to an arbitrary recipient — it is widely described as limited to the
-   * address the Resend account was opened with, which is why `ALERT_EMAIL_TO` should be that
+   * address the Resend account was opened with, which is why `ALERT_EMAIL` should be that
    * address; Resend's send-email reference does not say either way. The display name is plain ASCII
    * on purpose, so a rejected header cannot be the reason an alert silently fails.
    */
@@ -249,7 +249,8 @@ export interface AlertConfig {
  */
 export function getAlertConfig(): AlertConfig | undefined {
   const apiKey = read("RESEND_API_KEY");
-  const to = read("ALERT_EMAIL_TO");
+  // ALERT_EMAIL is the name the owner chose (2026-10-07); ALERT_EMAIL_TO, the first name, still works.
+  const to = read("ALERT_EMAIL") ?? read("ALERT_EMAIL_TO");
   if (apiKey === undefined || to === undefined || isPlaceholder(apiKey) || isPlaceholder(to)) return undefined;
   return { apiKey, to, from: read("ALERT_EMAIL_FROM") ?? "Order alerts <onboarding@resend.dev>" };
 }
@@ -263,14 +264,15 @@ export interface ContactConfig {
 
 /**
  * The contact form (T12.3). Needs the same Resend key as the order alerts plus its own recipient,
- * `CONTACT_EMAIL_TO`: the owner has not chosen an inbox yet, and a form that sends nowhere is worse
+ * `CONTACT_EMAIL`: the owner has not chosen an inbox yet, and a form that sends nowhere is worse
  * than none, so `undefined` here means **the form is not drawn at all** and the page shows only the
- * contact details. A separate variable, not `ALERT_EMAIL_TO`, so that turning the form on is a
+ * contact details. A separate variable, not `ALERT_EMAIL`, so that turning the form on is a
  * deliberate choice of where customers' messages land.
  */
 export function getContactConfig(): ContactConfig | undefined {
   const apiKey = read("RESEND_API_KEY");
-  const to = read("CONTACT_EMAIL_TO");
+  // CONTACT_EMAIL is the name the owner chose (2026-10-07); CONTACT_EMAIL_TO, the first name, still works.
+  const to = read("CONTACT_EMAIL") ?? read("CONTACT_EMAIL_TO");
   if (apiKey === undefined || to === undefined || isPlaceholder(apiKey) || isPlaceholder(to)) return undefined;
   return { apiKey, to, from: read("ALERT_EMAIL_FROM") ?? "Website <onboarding@resend.dev>" };
 }

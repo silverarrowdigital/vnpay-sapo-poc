@@ -18,7 +18,7 @@ export const metadata: Metadata = {
  * Contact (T12.3), drawn from design/site-v3/contact.html. The design's heading and labels are in
  * English ("Let's Talk", "Send Message") and are kept: they are the owner's own words.
  *
- * The enquiry form needs somewhere to send to. `CONTACT_EMAIL_TO` names that inbox; unset, the form
+ * The enquiry form needs somewhere to send to. `CONTACT_EMAIL` names that inbox; unset, the form
  * is not drawn and the page is just the contact details, which is what it was before. A form that
  * goes nowhere is worse than none.
  */

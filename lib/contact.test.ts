@@ -60,8 +60,19 @@ describe("sendContactMessage", () => {
     expect(body.subject).not.toMatch(/[\r\n]/);
   });
 
+  it("reads the inbox from CONTACT_EMAIL, the name the owner uses, before the older CONTACT_EMAIL_TO", async () => {
+    process.env.CONTACT_EMAIL = "new@shop.test";
+    try {
+      await sendContactMessage({ name: "A", email: "a@example.com", company: "", message: "Hi" });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).to).toEqual(["new@shop.test"]);
+    } finally {
+      delete process.env.CONTACT_EMAIL;
+    }
+  });
+
   it("does nothing, and says so, when no inbox is configured", async () => {
     delete process.env.CONTACT_EMAIL_TO;
+    delete process.env.CONTACT_EMAIL;
     expect(await sendContactMessage({ name: "A", email: "a@example.com", company: "", message: "Hi" })).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith("contact.not_configured", {});

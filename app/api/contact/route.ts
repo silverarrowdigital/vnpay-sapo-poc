@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * The contact form (T12.3). Switched off — 404 — until `CONTACT_EMAIL_TO` is set, so the endpoint
+ * The contact form (T12.3). Switched off — 404 — until `CONTACT_EMAIL` is set, so the endpoint
  * does not exist for a shop that has not chosen an inbox. Each send is a real email, hence the rate
  * limit, counted once the message has passed validation. Nothing the visitor typed is logged.
  */
