@@ -91,7 +91,7 @@ việc Resend nhận trường `reply_to` **chưa kiểm chứng**.
 - Sweep **không cứu được đơn tạo trước khi có sổ** (sổ chỉ có đơn từ PR 5 trở đi).
 - Vì `querydr` chỉ cho khoảng 1 lần/5 phút/terminal (ở sandbox), nếu **nhiều** IPN mất cùng lúc thì chỉ cứu được khoảng **một đơn
   mỗi 5 phút**.
-- **Chưa biết** gói miễn phí của Neon có đủ giờ tính toán khi cứ 5 phút lại có một lần truy vấn không (chưa kiểm).
+- **Gói Neon Free (chủ shop xác nhận 2026-10-07):** 100 giờ tính toán mỗi tháng, tự tắt sau 5 phút rảnh (trang gói của Neon). Hỏi cơ sở dữ liệu mỗi 5 phút sẽ giữ nó thức gần như cả ngày, khoảng 180 giờ tính toán mỗi tháng, nên bộ quét **chỉ mở kết nối khi có dấu hiệu trong Redis** (30 phút sau một lần thanh toán được bắt đầu, 2 giờ sau khi trình duyệt nhận chữ ký "đã trả"; commit 3b5f99d). **Chưa đo** số giờ thực dùng trong một tháng.
 - Chưa đo lại LCP sau khi thêm bộ nhớ đệm 30 giây cho trang danh sách.
 - Production và Preview dùng **chung một database** nên preview không được chạy migration và lịch sweep chỉ trỏ vào production.
   Biến Neon là "sensitive" của Vercel, không kéo về máy được; vì vậy test dùng PGlite thay vì Neon thật.
