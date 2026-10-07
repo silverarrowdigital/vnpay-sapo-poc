@@ -8,7 +8,12 @@ import { defaultVariant, formatVnd, isGroupSoldOut, priceRange, productHref, typ
  *
  * Rendered on the server from live Sapo data, so price and stock are never stale.
  */
-export default function ProductTile({ group }: { group: ProductGroup }) {
+/**
+ * `priority` is for the tiles at the top of the page: they are what the browser measures as the page
+ * loading (LCP), and `loading="lazy"` on them made /shop take 3.2 s on a throttled phone (Lighthouse,
+ * 2026-10-07). Everything below the fold stays lazy.
+ */
+export default function ProductTile({ group, priority = false }: { group: ProductGroup; priority?: boolean }) {
   const product = defaultVariant(group);
   const soldOut = isGroupSoldOut(group);
   const { fromVnd, varies } = priceRange(group);
@@ -21,7 +26,8 @@ export default function ProductTile({ group }: { group: ProductGroup }) {
           <img
             src={product.imageUrl}
             alt=""
-            loading="lazy"
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : "auto"}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           />
         ) : (

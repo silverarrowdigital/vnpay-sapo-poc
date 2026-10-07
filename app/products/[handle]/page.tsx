@@ -190,7 +190,7 @@ export default async function ProductDetailPage({
         <div className="aspect-square overflow-hidden rounded-sm bg-placeholder">
           {product.imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- remote Sapo CDN, no loader configured
-            <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" />
+            <img src={product.imageUrl} alt={product.name} fetchPriority="high" className="h-full w-full object-cover" />
           ) : (
             <span className="flex h-full w-full items-center justify-center text-xs text-ink-soft">Chưa có ảnh</span>
           )}
