@@ -44,7 +44,7 @@ export default function SiteHeader() {
     }
   };
 
-  const capsule = `flex min-h-[60px] items-center gap-6 rounded-md bg-page px-4 text-ink ${floating ? "" : "border border-line"}`;
+  const capsule = `relative flex min-h-[60px] items-center gap-6 rounded-md bg-page px-4 text-ink ${floating ? "" : "border border-line"}`;
 
   return (
     <header
@@ -56,7 +56,7 @@ export default function SiteHeader() {
         <Link href="/" className="text-sm leading-4 font-medium tracking-wide whitespace-nowrap text-ink no-underline">
           The&nbsp;Hour&nbsp;Tea
         </Link>
-        <details ref={menuRef} onKeyDown={onKeyDown} className="relative">
+        <details ref={menuRef} onKeyDown={onKeyDown}>
           <summary
             aria-label="Menu"
             className="flex cursor-pointer list-none items-center py-2 [&::-webkit-details-marker]:hidden"
@@ -69,7 +69,7 @@ export default function SiteHeader() {
           </summary>
           <nav
             aria-label="Menu"
-            className="absolute top-[calc(100%+28px)] -left-4 z-30 [&_a]:text-inherit w-[min(499px,calc(100vw-32px))] rounded-md border border-line bg-page p-8"
+            className="absolute top-[calc(100%+12px)] left-0 z-30 [&_a]:text-inherit w-[min(499px,calc(100vw-32px))] rounded-md border border-line bg-page p-8"
           >
             <ul className="m-0 grid list-none gap-3 p-0 text-xl leading-[26px]">
               {MENU.map((item) => (
