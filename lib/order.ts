@@ -34,6 +34,7 @@ import {
   type SapoOrderRef,
 } from "./sapo";
 import { queryVnpayTransaction } from "./querydr";
+import { markSweepActiveAfterCheckout, markSweepActiveAfterPaidReturn } from "./sweep";
 import {
   ledgerCompare,
   ledgerPaidParams,
@@ -446,6 +447,7 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
   // Also in the Postgres ledger (T14 PR 5). Never throws and never blocks the payment: Redis above is
   // still what the shop reads from.
   await ledgerRecordCheckout(order);
+  await markSweepActiveAfterCheckout();
 
   log.info("checkout.created", {
     txnRef,
@@ -854,7 +856,10 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
  */
 export async function markPaidReturn(txnRef: string): Promise<void> {
   try {
-    if (TXN_REF_PATTERN.test(txnRef)) await getOrderStore().hit(`paid-return:${txnRef}`, 2 * 60 * 60);
+    if (TXN_REF_PATTERN.test(txnRef)) {
+      await getOrderStore().hit(`paid-return:${txnRef}`, 2 * 60 * 60);
+      await markSweepActiveAfterPaidReturn();
+    }
   } catch (err) {
     log.warn("paid_return.mark_failed", { txnRef, error: errorMessage(err) });
   }

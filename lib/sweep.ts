@@ -23,6 +23,37 @@ import { ledgerSweepCandidates, type SweepCandidate } from "./ledger";
 import { errorMessage, log } from "./log";
 import { getOrderStore } from "./store";
 
+/**
+ * Why the sweep usually does not touch the database (Neon Free: 100 compute-hours a month, mandatory
+ * scale-to-zero after 5 idle minutes). A query every five minutes keeps the compute awake round the
+ * clock — about 0.25 CU × 720 h = 180 CU-hours, so the allowance would be gone around the 17th and the
+ * ledger suspended for the rest of the month. So the database is asked only while there is something it
+ * could answer: a checkout sets this hint for 30 minutes (the payment window is 15), and a signed
+ * "paid" browser return extends it to two hours (`markPaidReturn`). With no hint the run returns
+ * before opening a connection.
+ */
+export const SWEEP_ACTIVE_KEY = "sweep-active";
+export const SWEEP_ACTIVE_AFTER_CHECKOUT_SECONDS = 30 * 60;
+export const SWEEP_ACTIVE_AFTER_PAID_RETURN_SECONDS = 2 * 60 * 60;
+
+/** A checkout started: the sweep has something to watch for the next half hour. Never shortens a longer hint. Never throws. */
+export async function markSweepActiveAfterCheckout(): Promise<void> {
+  try {
+    await getOrderStore().kvSetIfAbsent(SWEEP_ACTIVE_KEY, "1", SWEEP_ACTIVE_AFTER_CHECKOUT_SECONDS);
+  } catch (err) {
+    log.warn("sweep.hint_failed", { error: errorMessage(err) });
+  }
+}
+
+/** A signed "paid" return: worth watching for as long as the sweep looks back. Never throws. */
+export async function markSweepActiveAfterPaidReturn(): Promise<void> {
+  try {
+    await getOrderStore().kvSet(SWEEP_ACTIVE_KEY, "1", SWEEP_ACTIVE_AFTER_PAID_RETURN_SECONDS);
+  } catch (err) {
+    log.warn("sweep.hint_failed", { error: errorMessage(err) });
+  }
+}
+
 export const MAX_PER_RUN = 10;
 /** A checkout nobody pays is asked about this many times (about 25 minutes at a five-minute cadence) and then left. */
 export const MAX_ASKS_PENDING = 5;
@@ -51,9 +82,13 @@ export interface SweepDeps {
   /** A reference whose browser was told "paid" is being given up on: tell the owner. */
   onGiveUp: (txnRef: string) => Promise<void>;
   now: () => number;
+  /** Is there any reason to open a database connection? See SWEEP_ACTIVE_KEY. */
+  isActive: () => Promise<boolean>;
 }
 
 export interface SweepResult {
+  /** True when the run returned at once because nothing had happened lately. */
+  idle?: boolean;
   candidates: number;
   asked: number;
   settled: number;
@@ -71,6 +106,8 @@ const defaultDeps = (reconcile: SweepDeps["reconcile"]): SweepDeps => ({
   hasPaidReturn: async () => false,
   onGiveUp: async () => undefined,
   now: () => Date.now(),
+  // If the store cannot say, assume active: an unneeded query is cheaper than a missed payment.
+  isActive: async () => (await getOrderStore().kvGet(SWEEP_ACTIVE_KEY).catch(() => "1")) !== undefined,
 });
 
 export async function runSweep(
@@ -80,6 +117,10 @@ export async function runSweep(
   const deps: SweepDeps = { ...defaultDeps(reconcile), ...overrides };
   const result: SweepResult = { candidates: 0, asked: 0, settled: 0, capped: 0, skippedForBudget: 0 };
   const started = deps.now();
+  if (!(await deps.isActive())) {
+    log.info("sweep.run", { idle: true });
+    return { ...result, idle: true };
+  }
   let list: SweepCandidate[];
   try {
     list = await deps.candidates();

@@ -22,6 +22,7 @@ function deps(over: Partial<Deps> = {}): Deps {
     hasPaidReturn: async () => false,
     onGiveUp: async () => undefined,
     now: () => Date.now(),
+    isActive: async () => true,
   };
   return { ...base, ...over } as Deps;
 }
@@ -196,5 +197,14 @@ describe("runSweep", () => {
     await runSweep(d.reconcile, d);
     expect(onGiveUp).toHaveBeenCalledTimes(1);
     expect(onGiveUp).toHaveBeenCalledWith("OLD-MARKED");
+  });
+
+  it("returns at once, without listing anything, when nothing has happened lately", async () => {
+    const candidates = vi.fn(async () => []);
+    const d = deps({ candidates, isActive: async () => false });
+    const r = await runSweep(d.reconcile, d);
+    expect(r.idle).toBe(true);
+    expect(candidates).not.toHaveBeenCalled();
+    expect(d.reconcile).not.toHaveBeenCalled();
   });
 });

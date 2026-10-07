@@ -65,6 +65,7 @@ const { SapoApiError, createOrderOnce, fetchOrderDetailByRef } = await import(".
 const { sendAlert } = await import("./alert");
 const { queryVnpayTransaction } = await import("./querydr");
 const { ledgerPaidParams } = await import("./ledger");
+const { SWEEP_ACTIVE_KEY } = await import("./sweep");
 const { CheckoutError, _resetStore, getOrder, alertUnsettledPaidReturn, handleIpn, lookupOrder, markPaidReturn, quoteTotals, reconcilePendingPayment, startCheckoutOnce, startCheckout, validateCheckout } =
   await import("./order");
 
@@ -834,5 +835,14 @@ describe("VNPAY's one-querydr-per-five-minutes limit", () => {
     await alertUnsettledPaidReturn(b.txnRef);
     expect(sendAlert).toHaveBeenCalledWith("sapo_failed", b.txnRef, expect.anything());
     expect(sendAlert).not.toHaveBeenCalledWith("paid_no_order", b.txnRef, expect.anything());
+  });
+
+  it("wakes the sweep for half an hour after a checkout, and for two hours after a signed 'paid' return", async () => {
+    const { getOrderStore } = await import("./store");
+    expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBeUndefined();
+    const { txnRef } = await pending();
+    expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1");
+    await markPaidReturn(txnRef);
+    expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1");
   });
 });
