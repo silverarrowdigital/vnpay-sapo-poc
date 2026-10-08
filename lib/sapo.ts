@@ -300,8 +300,10 @@ async function sapoFetch(cfg: SapoConfig, path: string, init: RequestInit = {}):
   }
   const text = await res.text();
   if (!res.ok) {
-    // Body is logged by the caller (truncated); never includes our credentials.
-    throw new SapoApiError(`Sapo ${init.method ?? "GET"} ${path} failed with HTTP ${res.status}`, res.status, text.slice(0, 1000));
+    // The body travels with the error but is never logged: it can echo the order back. Callers log
+    // only the names of the rejected fields (sapoErrorFields in lib/order.ts). Cut at 4,000 so a long
+    // 422 still parses as JSON for that.
+    throw new SapoApiError(`Sapo ${init.method ?? "GET"} ${path} failed with HTTP ${res.status}`, res.status, text.slice(0, 4000));
   }
   try {
     return text ? JSON.parse(text) : {};

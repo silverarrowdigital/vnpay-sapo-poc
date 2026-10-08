@@ -14,6 +14,16 @@ export const log = {
   error: (event: string, data?: Record<string, unknown>) => emit("error", event, data),
 };
 
+/**
+ * An error's message, safe to log and to store as an order's `lastError`.
+ *
+ * `@upstash/redis` throws `"<reason>, command was: <the whole command as JSON>"` on any non-2xx answer
+ * (quota, auth, size). That command can be `SET order:<ref>` with the customer's name, phone, email and
+ * address, a rate-limit key holding an IP or phone digits, and — with auto-pipelining — commands of
+ * other requests batched into the same call. Everything from that marker on is cut.
+ */
 export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = err instanceof Error ? err.message : String(err);
+  const marker = message.indexOf(", command was:");
+  return marker === -1 ? message : `${message.slice(0, marker)} (Redis command omitted)`;
 }

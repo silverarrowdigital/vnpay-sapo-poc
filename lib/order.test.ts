@@ -12,9 +12,10 @@ import type { CatalogProduct } from "./product";
 import type { OrderStore } from "./store";
 import { sign, type VnpParams } from "./vnpay";
 
-vi.mock("./log", () => ({
+vi.mock("./log", async (importOriginal) => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  errorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  // The real one: what it cuts out of an error is part of what these tests check.
+  errorMessage: (await importOriginal<typeof import("./log")>()).errorMessage,
 }));
 vi.mock("./catalog", () => ({ getVariantIndex: vi.fn() }));
 vi.mock("./alert", () => ({ sendAlert: vi.fn(async () => true) }));
@@ -70,6 +71,23 @@ const { queryVnpayTransaction } = await import("./querydr");
 const { ledgerPaidParams } = await import("./ledger");
 const { SWEEP_ACTIVE_KEY } = await import("./sweep");
 const { getDb } = await import("./db/client");
+const { sapoErrorFields } = await import("./order");
+
+describe("sapoErrorFields — what of a Sapo error may reach the log", () => {
+  it("keeps the names of the rejected fields and none of their values", () => {
+    const body = JSON.stringify({ errors: { source_name: ["cannot be set"], "customer.phone": ["0912345678 is invalid"] } });
+    const out = sapoErrorFields(body);
+    expect(out).toEqual(["source_name", "customer.phone"]);
+    expect(JSON.stringify(out)).not.toContain("0912345678");
+  });
+
+  it("gives only a length for anything else, so an echoed order never reaches the log", () => {
+    const echoed = JSON.stringify({ order: { customer: { first_name: "A", phone: "0912345678" } } });
+    expect(sapoErrorFields(echoed)).toEqual({ bodyLength: echoed.length });
+    expect(sapoErrorFields("<html>Bad gateway, Nguyen Van A</html>")).toEqual({ bodyLength: 38 });
+    expect(sapoErrorFields(undefined)).toBeUndefined();
+  });
+});
 const { CheckoutError, _resetStore, getOrder, alertUnsettledPaidReturn, handleIpn, lookupOrder, markPaidReturn, quoteTotals, reconcilePendingPayment, runSapoJob, startCheckoutOnce, startCheckout, validateCheckout } =
   await import("./order");
 
@@ -278,6 +296,22 @@ describe("handleIpn — the only place a paid order is created", () => {
     expect(createOrderOnce).not.toHaveBeenCalled();
   });
 
+  it("answers 01 to a correctly signed notification about another terminal, and creates nothing", async () => {
+    const { txnRef, amountVnd } = await pendingOrder();
+    expect((await handleIpn(ipn(txnRef, amountVnd, { vnp_TmnCode: "OTHERTMN" }))).RspCode).toBe("01");
+    // …and one that names no terminal at all, also signed with our secret.
+    const noTerminal: VnpParams = { vnp_TxnRef: txnRef, vnp_Amount: String(amountVnd * 100), vnp_ResponseCode: "00", vnp_TransactionStatus: "00" };
+    expect((await handleIpn({ ...noTerminal, vnp_SecureHash: sign(noTerminal, SECRET) })).RspCode).toBe("01");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await getOrder(txnRef))?.status).toBe("pending");
+    // Never silent: a mistyped VNPAY_TMN_CODE would refuse every paid IPN, so a successful one is mailed.
+    expect(sendAlert).toHaveBeenCalledWith("paid_no_order", txnRef, expect.objectContaining({ reason: expect.stringMatching(/OTHERTMN.*VNPAY_TMN_CODE/) }));
+    // A failed payment for another terminal is not worth a mail.
+    vi.mocked(sendAlert).mockClear();
+    await handleIpn(ipn(txnRef, amountVnd, { vnp_TmnCode: "OTHERTMN", vnp_ResponseCode: "24", vnp_TransactionStatus: "02" }));
+    expect(sendAlert).not.toHaveBeenCalled();
+  });
+
   it("answers 01 to a reference it never issued, and tells the owner a payment is unaccounted for", async () => {
     expect((await handleIpn(ipn("20200101000000000000", 378_000))).RspCode).toBe("01");
     expect(createOrderOnce).not.toHaveBeenCalled();
@@ -325,6 +359,18 @@ describe("handleIpn — the only place a paid order is created", () => {
     await handleIpn(ipn(txnRef, amountVnd));
     spy.mockRestore();
     expect(vi.mocked(sendAlert).mock.calls[0][2]?.reason).toMatch(/WAS created/);
+  });
+
+  it("keeps a Redis error's embedded command — the customer's record — out of lastError and the log", async () => {
+    const { txnRef, amountVnd } = await pendingOrder();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(
+      new Error('ERR max requests limit exceeded, command was: [["set","order:x",{"customer":{"name":"Nguyen Van Test","phone":"0912345678"}}]]'),
+    );
+    await handleIpn(ipn(txnRef, amountVnd));
+    const stored = await getOrder(txnRef);
+    expect(stored?.lastError).toBe("ERR max requests limit exceeded (Redis command omitted)");
+    const { log } = await import("./log");
+    expect(JSON.stringify(vi.mocked(log.error).mock.calls)).not.toMatch(/0912345678|Nguyen Van Test/);
   });
 
   it("does not alert for an unknown reference whose payment failed or was cancelled", async () => {

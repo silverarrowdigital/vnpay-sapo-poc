@@ -10,8 +10,8 @@
  *    runs inside `guarded`: errors are caught and logged, and a call that has not answered in
  *    `LEDGER_TIMEOUT_MS` is abandoned. No database configured is a quiet no-op.
  * 2. After the database fails or times out once, further calls in this process are skipped for
- *    `BREAKER_MS`. One IPN makes four ledger calls; without this a dead database would cost it four
- *    timeouts, and every retry the same.
+ *    `BREAKER_MS`. One IPN makes several ledger calls; without this a dead database would cost it a
+ *    timeout for each, and every retry the same.
  * 3. **Never log what the database echoes back.** A failed drizzle query's message carries the whole
  *    SQL and its parameters — for `orders`, the customer's name, phone, email and address.
  *    `describeDbError` keeps the Postgres code and the underlying cause and drops the rest.
@@ -382,7 +382,10 @@ export async function ledgerDueSapoJobs(limit: number, db?: LedgerDb): Promise<s
   );
 }
 
-/** What happened in Sapo: the order exists there, or creating it failed (never undoing a created one). */
+/**
+ * What happened in Sapo: the order exists there (which also finishes its Sapo job), or creating it
+ * failed (never undoing a created one).
+ */
 export async function ledgerRecordSapo(
   txnRef: string,
   result: { ok: true; id: number; name: string } | { ok: false },
@@ -393,18 +396,30 @@ export async function ledgerRecordSapo(
     txnRef,
     undefined,
     async (d) => {
-      const [order] = await d.select({ id: orders.id }).from(orders).where(eq(orders.webRef, txnRef));
-      if (order === undefined) return;
+      if (result.ok) {
+        // One statement, one round trip to the database: the IPN waits for this before answering VNPAY,
+        // and a cold Neon makes every round trip count. Mark the order created, record which Sapo order
+        // it became, and finish its Sapo job (PR 6b). Data-modifying CTEs all run, referenced or not.
+        await d.execute(sql`
+          with o as (
+            update ${orders} set integration_status = 'created', updated_at = now()
+            where ${orders.webRef} = ${txnRef} returning id
+          ), m as (
+            insert into ${sapoMappings} (order_id, sapo_order_id, sapo_order_name)
+            select id, ${result.id}, ${result.name} from o
+            on conflict (order_id) do nothing
+          ), j as (
+            update ${outboxJobs} set state = 'done', done_at = now(), locked_until = null
+            where ${outboxJobs.dedupeKey} = ${sapoJobKey(txnRef)} and ${outboxJobs.state} <> 'done'
+          )
+          select 1`);
+        return;
+      }
+      // A failure never undoes a created order (a stale attempt landing after a timeout).
       await d
         .update(orders)
-        .set({ integrationStatus: result.ok ? "created" : "failed", updatedAt: sql`now()` })
-        .where(result.ok ? eq(orders.id, order.id) : and(eq(orders.id, order.id), ne(orders.integrationStatus, "created")));
-      if (result.ok) {
-        await d
-          .insert(sapoMappings)
-          .values({ orderId: order.id, sapoOrderId: result.id, sapoOrderName: result.name })
-          .onConflictDoNothing({ target: sapoMappings.orderId });
-      }
+        .set({ integrationStatus: "failed", updatedAt: sql`now()` })
+        .where(and(eq(orders.webRef, txnRef), ne(orders.integrationStatus, "created")));
     },
     db,
   );

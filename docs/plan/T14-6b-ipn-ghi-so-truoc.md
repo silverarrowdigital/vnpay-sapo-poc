@@ -73,7 +73,39 @@ nhánh Neon riêng); chỉ có unit test.
 
 ## Kết quả 2026-10-08
 
-**Trạng thái: đã code và đã review, chưa commit, chưa deploy.**
+**Trạng thái: đã code, review, commit (`c8b5abb`) và deploy lên production ngày 2026-10-08. Kết quả kiểm chứng trên production nằm ở mục ngay dưới.**
+
+### Kiểm chứng trên production, 2026-10-08
+
+- Log build Vercel ghi "migrate: schema is up to date" (05:02:36Z), tức migration `0001` đã áp dụng.
+- Một thanh toán sandbox thật, mã tham chiếu `20261008120437G5B94VT5ZQQD6X6T` (Test Product 2, 80.000₫, thẻ NCB): log ra
+  `ipn.ledger_committed` (committed) → `sapo.order_created` #1043 → job `done` → IPN trả `00`, `durationMs` 7396. VNPAY gửi IPN chưa đến
+  0,6 giây sau khi OTP được xác nhận.
+- Phát lại đúng callback đã ký của VNPAY → trả `02`, không tạo đơn trùng. Sapo có đúng một đơn (đã trả, 80.000, giao dịch
+  sale/success VNPAY); đã xoá theo id (DELETE 200, không còn đơn nào mang tag). Tồn kho Test Product 2 giảm 34 → 33 và **chưa
+  được cộng lại**.
+- Độ trễ IPN **trước** thay đổi một-câu-lệnh bên dưới: 7396 ms = `commit_paid` ~3,4 s (Neon nguội) + Sapo ~2,4 s + `job_done` 0,22 s
+  + `sapo` 0,67 s + `compare` 0,22 s + `webhook` 0,45 s.
+- Form liên hệ: `POST /api/contact` trên production lúc 05:03:33Z trả 200 `{ok:true}`, log `contact.sent` lúc 05:03:34Z, nên Resend
+  nhận payload (kể cả `reply_to`). Thư có vào hộp thư hay chưa: chủ shop chưa xác nhận; code không ghi mã thư của Resend.
+- Mail cảnh báo: **vẫn chưa từng gửi**. Thử kích hoạt bằng một IPN tự ký cho mã chưa phát hành bị bộ phân loại quyền của Claude Code
+  chặn. Chủ shop có thể tự chạy: `node --env-file=.env.local scripts/simulate-ipn.mjs 20261008120000999999 1000 00 https://vnpay-sapo-poc.vercel.app`.
+  `ALERT_EMAIL` và `CONTACT_EMAIL` đã được chủ shop đặt trên Vercel ngày 2026-10-08.
+- Script `querydr` và `refund` chạy ngày 2026-10-08 với `VNPAY_PAYMENT_URL` của production và không có `VNPAY_QUERYDR_URL`: cả hai
+  từ chối trước khi gọi mạng.
+
+### Việc làm tiếp sau c8b5abb (đã sửa trong thư mục làm việc, chưa commit)
+
+1. **Kiểm tra terminal của IPN:** sau bước chữ ký (97), thông báo thiếu `vnp_TmnCode` hoặc khác `VNPAY_TMN_CODE` bị trả `01`
+   "Order not found", log lỗi `ipn.wrong_terminal`, ghi vào `webhook_inbox`; nếu báo thanh toán thành công thì gửi mail
+   `paid_no_order` (lý do nêu cả hai terminal). Không đụng store, sổ hay Sapo.
+2. **Dữ liệu cá nhân trong log:** `errorMessage` cắt phần `, command was: …` của `@upstash/redis`; `sapo.order_failed` /
+   `cod.order_failed` chỉ log tên các trường Sapo từ chối (`errorFields`); `checkout.created` không còn log tỉnh/thành.
+3. **Độ trễ:** ở đường thành công, `ledgerRecordSapo({ok:true})` là **một** câu lệnh SQL (CTE ghi dữ liệu: orders → created, thêm
+   `sapo_mappings`, job → done) thay cho bốn lượt gọi. **Con số mới CHƯA đo**; một thanh toán sandbox sau lần deploy tới sẽ đo.
+4. Test mới `lib/catalog.test.ts`, `lib/log.test.ts`: 15 file / 239 test đạt, typecheck, lint, build đạt (chỉ ở máy, 2026-10-08).
+
+### Kết quả lúc code xong (trước khi deploy)
 
 **Đã kiểm chứng (chỉ ở máy, 2026-10-08):** `npm test` 13 file / 229 test đạt; typecheck, lint, build đạt (test-runner chạy trước
 vài sửa nhỏ cuối; typecheck, lint và test chạy lại sau đó). Test sổ và IPN chạy trên Postgres thật trong tiến trình (PGlite).

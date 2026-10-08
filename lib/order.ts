@@ -459,7 +459,7 @@ export async function startCheckout(input: CheckoutInput, ipAddr: string): Promi
     discountVnd: totals.discount?.amountVnd ?? 0,
     shippingVnd: totals.shipping.feeVnd,
     amountVnd: totals.totalVnd,
-    province: address.province,
+    // No province: next to a reference and an amount it is part of the customer's address.
     lines: lines.length,
     units: lines.reduce((n, l) => n + l.quantity, 0),
     store: store.kind,
@@ -594,7 +594,7 @@ async function placeCodOrder(order: PendingOrder): Promise<CheckoutStarted> {
     order.status = "sapo_error";
     order.lastError = errorMessage(err);
     const e = err as { status?: number; body?: string };
-    log.error("cod.order_failed", { txnRef: order.txnRef, error: order.lastError, status: e.status, body: e.body });
+    log.error("cod.order_failed", { txnRef: order.txnRef, error: order.lastError, status: e.status, errorFields: sapoErrorFields(e.body) });
     try {
       await store.put(order);
     } catch (persistErr) {
@@ -646,8 +646,9 @@ function toSapoInput(order: PendingOrder, params?: VnpParams): SapoOrderInput {
  */
 export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
   let hashSecret: string;
+  let tmnCode: string;
   try {
-    hashSecret = getVnpayConfig().hashSecret;
+    ({ hashSecret, tmnCode } = getVnpayConfig());
   } catch (err) {
     log.error("ipn.config_error", { error: errorMessage(err) });
     return { RspCode: "99", Message: "Unknown error" };
@@ -656,6 +657,24 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
   if (!verifySignature(params, hashSecret)) {
     log.warn("ipn.invalid_signature", { txnRef: params.vnp_TxnRef });
     return { RspCode: "97", Message: "Invalid signature" };
+  }
+  // The merchant check. A valid signature already implies our secret, but a secret can be shared by
+  // several terminals of one merchant account; a notification about another terminal's transaction
+  // is not about an order of ours, whatever its reference says. The querydr path checks the same.
+  if (params.vnp_TmnCode !== tmnCode) {
+    // Never quiet: a mistyped VNPAY_TMN_CODE (or the production terminal swap at go-live) would refuse
+    // every paid IPN, and querydr refuses on the same comparison, so nothing else would finish them.
+    log.error("ipn.wrong_terminal", { txnRef: params.vnp_TxnRef, received: params.vnp_TmnCode ?? null, expected: tmnCode });
+    if (isPaymentSuccess(params)) {
+      await notifyOwner("paid_no_order", params.vnp_TxnRef ?? "", {
+        amountVnd: Number(params.vnp_Amount) / 100,
+        vnpTransactionNo: params.vnp_TransactionNo,
+        reason: `signed notification for terminal ${params.vnp_TmnCode ?? "(none)"}, this shop is ${tmnCode}: check VNPAY_TMN_CODE`,
+      });
+    }
+    const refused: IpnResponse = { RspCode: "01", Message: "Order not found" };
+    await ledgerRecordWebhook("ipn", params, refused.RspCode);
+    return refused;
   }
   log.info("ipn.checksum_verified", { txnRef: params.vnp_TxnRef });
   const { RspCode, Message } = await settlePayment(params);
@@ -848,7 +867,7 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
       sapoOrderId: sapoOrder.id,
       sapoOrderName: sapoOrder.name,
     });
-    await ledgerFinishSapoJob(txnRef);
+    // Also finishes the order's Sapo job, in the same database statement.
     await ledgerRecordSapo(txnRef, { ok: true, id: sapoOrder.id, name: sapoOrder.name });
     await ledgerCompare(order);
     return { ...(durable ? durableAnswer : CONFIRMED), sapo: "created" };
@@ -856,7 +875,7 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
     order.status = "sapo_error";
     order.lastError = errorMessage(err);
     const e = err as { status?: number; body?: string };
-    log.error("sapo.order_failed", { txnRef, error: order.lastError, status: e.status, body: e.body });
+    log.error("sapo.order_failed", { txnRef, error: order.lastError, status: e.status, errorFields: sapoErrorFields(e.body) });
     try {
       await store.put(order);
     } catch (persistErr) {
@@ -930,7 +949,10 @@ export async function runSapoJob(txnRef: string): Promise<SapoJobOutcome> {
       return "retry";
     }
     const res = await settlePayment(recorded);
-    if (res.sapo === "created" || (await store.get(txnRef))?.status === "completed") {
+    // "created" already finished the job inside settlePayment (ledgerRecordSapo); only an order someone
+    // else completed meanwhile needs the job closed here.
+    if (res.sapo === "created") return "done";
+    if ((await store.get(txnRef))?.status === "completed") {
       await ledgerFinishSapoJob(txnRef);
       return "done";
     }
@@ -1303,6 +1325,27 @@ export async function lookupOrder(txnRef: string, phone: string, ip: string): Pr
     .catch(() => undefined);
   log.info("lookup.hit", { sapoOrderId: detail.id });
   return { outcome: "found", order: detail, paymentMethod: stored?.paymentMethod ?? "vnpay" };
+}
+
+/**
+ * What may be logged of a Sapo error response: the **names** of the fields Sapo rejected (from its
+ * `{"errors":{"field":[…]}}` shape), never the body. A body can echo the order back — name, phone,
+ * address — and the log is read by people and kept by the platform. The names are what debugging
+ * needs (`source_name` was the whole story of the one 422 seen so far). Anything else: its length.
+ */
+export function sapoErrorFields(body: string | undefined): string[] | { bodyLength: number } | undefined {
+  if (body === undefined || body === "") return undefined;
+  try {
+    const parsed = JSON.parse(body) as { errors?: unknown };
+    if (parsed.errors !== null && typeof parsed.errors === "object" && !Array.isArray(parsed.errors)) {
+      return Object.keys(parsed.errors)
+        .slice(0, 20)
+        .map((k) => k.replace(/[^A-Za-z0-9_.[\]-]/g, "").slice(0, 60));
+    }
+  } catch {
+    // not JSON
+  }
+  return { bodyLength: body.length };
 }
 
 /**

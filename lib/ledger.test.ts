@@ -444,6 +444,21 @@ describe("the Sapo job's life after the commit", () => {
     await expect(ledgerFinishSapoJob("J-NONE", db)).resolves.toBeUndefined();
   });
 
+  it("finishes the job in the same statement that records the Sapo order", async () => {
+    await ledgerCommitPaid(pending("J-SAPO"), PAID, db);
+    await ledgerRecordSapo("J-SAPO", { ok: true, id: 339424853, name: "#1043" }, db);
+    expect(await jobOf("J-SAPO")).toMatchObject({ state: "done" });
+    const o = await orderOf("J-SAPO");
+    expect(o.integrationStatus).toBe("created");
+    expect(await db.select().from(schema.sapoMappings).where(eq(schema.sapoMappings.orderId, o.id))).toEqual([
+      expect.objectContaining({ sapoOrderId: 339424853, sapoOrderName: "#1043" }),
+    ]);
+    // A late failure changes nothing that was created.
+    await ledgerRecordSapo("J-SAPO", { ok: false }, db);
+    expect((await orderOf("J-SAPO")).integrationStatus).toBe("created");
+    expect(await jobOf("J-SAPO")).toMatchObject({ state: "done" });
+  });
+
   it("lists only the jobs of this deployment's Redis namespace, not a preview's in the shared database", async () => {
     await ledgerCommitPaid(pending("J-MINE"), PAID, db);
     await ledgerCommitPaid(pending("J-PREVIEW"), PAID, db);
