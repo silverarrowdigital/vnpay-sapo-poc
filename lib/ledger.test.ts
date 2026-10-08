@@ -493,3 +493,24 @@ describe("the sweep list's lower bound and order", () => {
     expect(mine).toEqual(["Q-PEND-NEWER", "Q-PAID-OLD", "Q-PEND-OLDER"]); // newest first; the 30 s-old paid order is not listed
   });
 });
+
+describe("ledger.commit_timing — where a commit's time goes (T14 PR 6c)", () => {
+  it("logs the connect, first-statement and total times of a commit, and nothing that identifies the customer", async () => {
+    await ledgerRecordCheckout(pending("TM-1"), db);
+    vi.mocked(log.info).mockClear();
+    expect(await ledgerCommitPaid(pending("TM-1"), PAID, db)).toBe("committed");
+    const call = vi.mocked(log.info).mock.calls.find((c) => c[0] === "ledger.commit_timing");
+    expect(call?.[1]).toMatchObject({ txnRef: "TM-1", outcome: "committed", beganMs: expect.any(Number), firstMs: expect.any(Number), totalMs: expect.any(Number) });
+    const t = call![1] as { beganMs: number; firstMs: number; totalMs: number };
+    expect(t.beganMs).toBeLessThanOrEqual(t.firstMs);
+    expect(t.firstMs).toBeLessThanOrEqual(t.totalMs);
+    expect(JSON.stringify(call)).not.toMatch(/Nguyen|0912345678|a@example\.com/);
+  });
+
+  it("logs nothing when the commit failed (the failure has its own line)", async () => {
+    vi.mocked(log.info).mockClear();
+    const broken = { transaction: () => { throw new Error("connection refused"); } } as never;
+    expect(await ledgerCommitPaid(pending("TM-2"), PAID, broken)).toBe("unavailable");
+    expect(vi.mocked(log.info).mock.calls.some((c) => c[0] === "ledger.commit_timing")).toBe(false);
+  });
+});

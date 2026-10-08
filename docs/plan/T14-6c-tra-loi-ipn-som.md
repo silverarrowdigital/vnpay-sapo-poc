@@ -1,6 +1,7 @@
 # T14 PR 6c — Trả lời VNPAY ngay sau khi sổ đã ghi, tạo đơn Sapo sau
 
-**Trạng thái: CHỜ DUYỆT (2026-10-08). Chưa có dòng code nào.** Thuộc [T14](T14-so-giao-dich-postgres.md), nối tiếp
+**Trạng thái: ĐÃ DUYỆT D1–D3 (2026-10-08, theo khuyến nghị) · ĐÃ CODE và review · CHƯA commit, CHƯA deploy.** Kết quả kiểm ở máy: xem
+"Kết quả 2026-10-08 (trước deploy)" ở cuối file. Thuộc [T14](T14-so-giao-dich-postgres.md), nối tiếp
 [PR 6b](T14-6b-ipn-ghi-so-truoc.md) (đã deploy).
 
 ## Vì sao
@@ -42,7 +43,7 @@ một IPN nào; lợi ích là giảm rủi ro, không phải sửa lỗi đã x
 | # | Câu hỏi | Khuyến nghị |
 |---|---|---|
 | D1 | Làm PR này, hay để IPN 5,7 s? | **Làm.** Nhỏ, không migration, rollback bằng revert; giảm ~2,7 s |
-| D2 | Đặt `maxDuration = 60` cho route IPN? | **Có.** Phần hoãn cần chạy hết Sapo (15 s × 2 lần gọi) mà không chờ mặc định |
+| D2 | Đặt `maxDuration` cho route IPN? | **Có. Đã chốt 120 giây (ban đầu ghi 60).** Phần hoãn cần chạy hết Sapo (15 s × 2 lần gọi) mà không chờ mặc định. Reviewer tính ca xấu nhất với Sapo chậm: commit sổ ≤ 4 s + hai lần gọi Sapo ≤ 15 s mỗi lần + ba lần ghi sổ ≤ 4 s mỗi lần + mail cảnh báo ≤ 5 s ≈ 55 s, sát 60 nên nâng lên 120 |
 | D3 | Thêm log thời gian chi tiết cho `commit_paid` (kết nối vs từng câu lệnh) | **Có**, cùng PR: để biết 2,6 s là kết nối nguội hay 9 câu lệnh — quyết định bước giảm tiếp theo |
 
 ## File
@@ -66,6 +67,24 @@ thời gian) · `lib/order.test.ts` · docs (`CLAUDE.md`, T14, README). Đụng 
 phải đến **trước** `sapo.order_created`, `durationMs` kỳ vọng ~3 s; replay callback ⇒ `02`; Sapo đúng một đơn.
 **Chưa kiểm được ở đây:** tiến trình bị Vercel dừng thật giữa phần hoãn (chỉ mô phỏng); và việc `after` trên deployment này thật sự
 sống đủ lâu — log phải chứng minh bằng cách `sapo.order_created` xuất hiện sau `ipn.response`.
+
+## Kết quả 2026-10-08 (trước deploy)
+
+Hai hành vi thêm vào lúc code (không có trong thiết kế ban đầu):
+
+- Nếu `after` ném lỗi ngay (Next ném khi gọi ngoài phạm vi một request), claim được nhả và IPN **quay về tạo đơn ngay trong lúc xử lý** như trước 6c (log `ipn.defer_unavailable`). Lý do: không để claim bị giữ mà không có ai chạy phần hoãn.
+- `runSapoJob` gặp claim đang bị giữ (`busy`) thì không tính là một lần thử thất bại.
+
+**Đã kiểm, chỉ ở máy (2026-10-08):** 15 file / 253 test đạt; typecheck, lint, build đạt. Test mới (PGlite): trả lời trước khi gọi Sapo; claim được giữ rồi nhả; phần hoãn không bao giờ chạy thì `runSapoJob` làm nốt; lỗi trong phần hoãn được đếm; `defer` ném lỗi; `already` + hoãn; sổ `unavailable` vẫn đồng bộ; chữ ký giả / sai số tiền / thanh toán thất bại không hoãn gì; `busy` không bị đếm. Đột biến (đã hoàn lại): nhả claim lúc trả lời làm đỏ 2 test; hoãn khi sổ `unavailable` làm đỏ 1 test. `reviewer`: không có lỗi nghiêm trọng; hai mục nên sửa đã sửa (claim bị rò khi `after` ném lỗi; một test chưa chạm tới `catch` của lớp bọc); `maxDuration` nâng từ 60 lên 120. Có thêm log `ledger.commit_timing` (D3).
+
+**CHƯA kiểm — đừng coi là đã chắc:**
+
+- Chạy trên Vercel thật: `after()` có sống tới khi xong việc không (trong log `ipn.response` phải đến **trước** `sapo.order_created`).
+- Thời gian IPN mới: kỳ vọng ~3 s; lần đo gần nhất là 5660 ms (trước thay đổi này).
+- Dấu `sweep-active` giờ được đặt sau mỗi IPN thành công (2 giờ): nếu khách đóng tab, mỗi đơn có thể kéo tới ~24 lần sweep và tốn giờ tính toán Neon Free; ngân sách giờ tính toán vẫn chưa đo.
+- VNPAY chờ câu trả lời IPN bao lâu: không biết.
+
+**Lỗi nhỏ biết trước, để lại:** nếu `store.put(completed)` ném lỗi sau khi Sapo đã tạo đơn, `catch` ghi `sapo_error`, đếm một lần thất bại cho job và gửi mail `sapo_failed` dù đơn đã có (đã có từ trước; tìm theo tag trong `createOrderOnce` ngăn tạo đơn trùng).
 
 ## Rủi ro
 

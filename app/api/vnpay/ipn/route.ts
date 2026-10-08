@@ -1,10 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { errorMessage, log } from "@/lib/log";
 import { handleIpn } from "@/lib/order";
 import { extractVnpParams } from "@/lib/vnpay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// The Sapo call runs after the answer (T14 PR 6c), through `after`, which lives as long as this limit. Worst
+// case, with Sapo slow: a 4 s ledger commit, then two Sapo calls of 15 s, three more ledger calls of up to
+// 4 s and the 5 s alert mail — about 55 s. 120 s (as for the sweep) leaves room instead of cutting off the
+// job count and the owner's mail exactly when they are needed.
+export const maxDuration = 120;
 
 /**
  * VNPAY server-to-server IPN (GET with vnp_* query params). Authoritative payment result.
@@ -26,7 +31,7 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    const result = await handleIpn(params);
+    const result = await handleIpn(params, { defer: (work) => after(work) });
     log.info("ipn.response", {
       txnRef: params.vnp_TxnRef,
       rspCode: result.RspCode,

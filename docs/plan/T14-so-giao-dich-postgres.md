@@ -1,9 +1,11 @@
 # T14 — Sổ giao dịch trên Postgres (PR 4–6 của kế hoạch sprint)
 
 **Trạng thái (2026-10-08): PR 4 xong. PR 5 xong và đã kiểm chứng trên production. PR 6 xong ở dạng "quét đơn" (sweep). PR 6b
-(IPN ghi sổ trong một transaction rồi mới trả lời VNPAY) đã code và đã review, CHƯA commit, CHƯA deploy, mới có unit test (xem
-[T14-6b](T14-6b-ipn-ghi-so-truoc.md)).** Neon đã được chủ tài khoản bật (Production và Preview dùng chung **một** database).
-Còn lại: deploy và kiểm 6b bằng một thanh toán sandbox thật, đọc từ Postgres thay Redis, PR 7–10 (xem cuối trang).
+(IPN ghi sổ trong một transaction rồi mới trả lời VNPAY) đã commit (`c8b5abb`) và deploy, đã kiểm bằng thanh toán sandbox thật
+(xem [T14-6b](T14-6b-ipn-ghi-so-truoc.md)). PR 6c (trả lời VNPAY ngay sau khi sổ đã ghi, tạo đơn Sapo sau; xem
+[T14-6c](T14-6c-tra-loi-ipn-som.md)) đã duyệt, đã code và đã review, CHƯA commit, CHƯA deploy, mới có unit test ở máy (253 test).**
+Neon đã được chủ tài khoản bật (Production và Preview dùng chung **một** database).
+Còn lại: deploy và kiểm 6c bằng một thanh toán sandbox thật, đọc từ Postgres thay Redis, PR 7–10 (xem cuối trang).
 
 ## Vì sao cần
 

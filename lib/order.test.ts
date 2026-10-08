@@ -1150,3 +1150,165 @@ describe("PR 6b — the IPN records the payment and its Sapo job in one transact
     expect(sendAlert).not.toHaveBeenCalledWith("paid_no_order", ref, expect.anything());
   });
 });
+
+describe("PR 6c — answer VNPAY once the payment is durable, create the Sapo order after", () => {
+  let client: InstanceType<typeof PGlite>;
+  let db: ReturnType<typeof drizzle<typeof schema>>;
+  beforeAll(async () => {
+    client = new PGlite();
+    db = drizzle(client, { schema });
+    await migrate(db, { migrationsFolder: "./drizzle" });
+  });
+  afterAll(async () => client.close());
+  beforeEach(() => {
+    real._resetLedgerBreaker();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    vi.mocked(ledgerPaidParams).mockImplementation((ref) => real.ledgerPaidParams(ref));
+  });
+
+  async function paidCheckout(): Promise<{ txnRef: string; amountVnd: number }> {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    return { txnRef: started.txnRef, amountVnd: 378_000 };
+  }
+  const jobsOf = (ref: string) => db.select().from(schema.outboxJobs).where(eq(schema.outboxJobs.dedupeKey, real.sapoJobKey(ref)));
+  /** What `after()` does: remember the work, run it only when the test says the answer has gone out. */
+  function deferrer() {
+    const queue: (() => Promise<void>)[] = [];
+    return { defer: (work: () => Promise<void>) => void queue.push(work), run: async () => { for (const w of queue.splice(0)) await w(); }, queue };
+  }
+
+  it("answers 00 before Sapo is called, then creates exactly one order, finishes the job and frees the claim", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const d = deferrer();
+    expect(await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).toEqual({ RspCode: "00", Message: "Confirm Success" });
+    expect(createOrderOnce).not.toHaveBeenCalled(); // the answer has gone out; Sapo has not been asked
+    expect(d.queue).toHaveLength(1);
+    expect((await jobsOf(txnRef))[0].state).toBe("pending"); // durable, waiting
+    expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1"); // so the sweep would find it if the work never ran
+
+    await d.run();
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect((await jobsOf(txnRef))[0].state).toBe("done");
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+    expect(await getOrderStore().claim(txnRef)).toBe(true); // released
+  });
+
+  it("holds the claim while the work is pending: a replay then gets 99, and 02 once it is done", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const d = deferrer();
+    await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer });
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).RspCode).toBe("99");
+    expect(d.queue).toHaveLength(1); // the replay queued nothing
+    await d.run();
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).RspCode).toBe("02");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it("when the deferred work never runs, the job is still there and the sweep's runner finishes the order once", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const d = deferrer();
+    await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer });
+    d.queue.length = 0; // the process died after answering
+    await getOrderStore().release(txnRef); // …and its claim expired
+    expect(await runSapoJob(txnRef)).toBe("done");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect((await jobsOf(txnRef))[0].state).toBe("done");
+  });
+
+  it("counts a Sapo failure in the deferred work on the job, mails the owner, frees the claim, and throws nothing", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    const d = deferrer();
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).RspCode).toBe("00");
+    await expect(d.run()).resolves.toBeUndefined();
+    expect((await jobsOf(txnRef))[0]).toMatchObject({ state: "pending", attempts: 1 });
+    expect(sendAlert).toHaveBeenCalledWith("sapo_failed", txnRef, expect.anything());
+    expect(await getOrderStore().claim(txnRef)).toBe(true);
+  });
+
+  it("frees the claim and logs it even if the deferred work fails somewhere nothing inside it catches", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    // …so the Sapo catch block itself runs, and a ledger write inside it rejects (the ledger guards itself
+    // and never does, but the wrapper must not depend on that).
+    const ledger = await import("./ledger");
+    const spy = vi.spyOn(ledger, "ledgerRecordSapo").mockRejectedValueOnce(new Error("ledger exploded"));
+    const d = deferrer();
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).RspCode).toBe("00");
+    await expect(d.run()).resolves.toBeUndefined();
+    spy.mockRestore();
+    const { log } = await import("./log");
+    expect(log.error).toHaveBeenCalledWith("ipn.deferred_failed", expect.objectContaining({ txnRef }));
+    expect(await getOrderStore().claim(txnRef)).toBe(true);
+  });
+
+  it("falls back to creating the order inline, and frees the claim, when the defer function itself throws", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const broken = () => {
+      throw new Error("after was called outside a request scope");
+    };
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: broken })).RspCode).toBe("00");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect((await jobsOf(txnRef))[0].state).toBe("done");
+    expect(await getOrderStore().claim(txnRef)).toBe(true);
+    // and with Sapo down as well, the old answer: 00 is durable, so the job keeps the order
+    const b = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect((await handleIpn(ipn(b.txnRef, b.amountVnd), { defer: broken })).RspCode).toBe("00");
+    expect((await jobsOf(b.txnRef))[0]).toMatchObject({ state: "pending", attempts: 1 });
+    expect(await getOrderStore().claim(b.txnRef)).toBe(true);
+  });
+
+  it("answers 02 and still creates exactly one order when an earlier IPN committed and died (ledger paid, Redis processing)", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    expect(await real.ledgerCommitPaid((await getOrder(txnRef))!, ipn(txnRef, amountVnd))).toBe("committed");
+    await getOrderStore().put({ ...(await getOrder(txnRef))!, status: "processing" });
+    const d = deferrer();
+    expect((await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer })).RspCode).toBe("02");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    await d.run();
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(await jobsOf(txnRef)).toHaveLength(1);
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+
+  it("stays synchronous when the ledger cannot confirm the payment: 00 only once Sapo has the order, 99 otherwise", async () => {
+    const down = new Proxy({}, { get: () => () => { throw new Error("connection refused"); } });
+    const a = await paidCheckout();
+    const b = await paidCheckout();
+    vi.mocked(getDb).mockReturnValue(down as never);
+    const d = deferrer();
+    expect((await handleIpn(ipn(a.txnRef, a.amountVnd), { defer: d.defer })).RspCode).toBe("00");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1); // it was NOT deferred
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect((await handleIpn(ipn(b.txnRef, b.amountVnd), { defer: d.defer })).RspCode).toBe("99");
+    expect(d.queue).toHaveLength(0);
+  });
+
+  it("defers nothing for a failed or cancelled payment, a wrong amount or a forged signature", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const d = deferrer();
+    expect((await handleIpn({ ...ipn(txnRef, amountVnd), vnp_SecureHash: "a".repeat(128) }, { defer: d.defer })).RspCode).toBe("97");
+    expect((await handleIpn(ipn(txnRef, amountVnd + 1), { defer: d.defer })).RspCode).toBe("04");
+    expect((await handleIpn(ipn(txnRef, amountVnd, { vnp_ResponseCode: "24", vnp_TransactionStatus: "02" }), { defer: d.defer })).RspCode).toBe("00");
+    expect(d.queue).toHaveLength(0);
+    expect(await getOrderStore().claim(txnRef)).toBe(true);
+  });
+
+  it("does not spend one of a job's attempts when it finds the claim held by work in progress", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const d = deferrer();
+    await handleIpn(ipn(txnRef, amountVnd), { defer: d.defer }); // claim now held by the pending work
+    expect(await runSapoJob(txnRef)).toBe("retry");
+    expect((await jobsOf(txnRef))[0]).toMatchObject({ state: "pending", attempts: 0 });
+    expect(createOrderOnce).not.toHaveBeenCalled();
+  });
+
+  it("the querydr door creates the order inline, as before", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: true as const, params: ipn(txnRef, amountVnd) });
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+  });
+});

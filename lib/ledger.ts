@@ -238,12 +238,20 @@ export type CommitPaidResult = "committed" | "already" | "unavailable";
  */
 export async function ledgerCommitPaid(order: PendingOrder, params: VnpParams, db?: LedgerDb): Promise<CommitPaidResult> {
   const txnRef = order.txnRef;
+  // Where the time goes (T14 PR 6c): measured on production the whole commit took ~2.6 s on a cold Neon,
+  // and it was not known whether that is the connection or the nine statements. Logged per commit so
+  // the next step is chosen from numbers: `beganMs` = pool connect + BEGIN, `firstMs` = up to the first
+  // statement's answer, `totalMs` = through COMMIT.
+  const t0 = Date.now();
+  let beganMs = 0;
+  let firstMs = 0;
   const result = await guarded<CommitPaidResult | "refunded">(
     "commit_paid",
     txnRef,
     "unavailable",
-    (d) =>
-      d.transaction(async (tx) => {
+    async (d) => {
+      const outcome = await d.transaction(async (tx) => {
+        beganMs = Date.now() - t0;
         await tx
           .insert(orders)
           .values({
@@ -257,6 +265,7 @@ export async function ledgerCommitPaid(order: PendingOrder, params: VnpParams, d
             paymentMethod: order.paymentMethod ?? "vnpay",
           })
           .onConflictDoNothing({ target: orders.webRef });
+        firstMs = Date.now() - t0;
         const [o] = await tx.select({ id: orders.id }).from(orders).where(eq(orders.webRef, txnRef));
         if (o === undefined) throw new Error("ledger order row missing after upsert");
         await tx
@@ -294,7 +303,10 @@ export async function ledgerCommitPaid(order: PendingOrder, params: VnpParams, d
           .values({ kind: SAPO_JOB_KIND, orderId: o.id, dedupeKey: sapoJobKey(txnRef), payload: { txnRef, ns: _keyNamespace() } })
           .onConflictDoNothing({ target: outboxJobs.dedupeKey });
         return already ? "already" : "committed";
-      }),
+      });
+      log.info("ledger.commit_timing", { txnRef, beganMs, firstMs, totalMs: Date.now() - t0, outcome });
+      return outcome;
+    },
     db,
   );
   if (result === "refunded") {
