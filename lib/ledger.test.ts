@@ -29,6 +29,12 @@ const {
   ledgerRecordWebhook,
   ledgerPaidParams,
   ledgerSweepCandidates,
+  ledgerCommitPaid,
+  ledgerDueSapoJobs,
+  ledgerFailSapoJob,
+  ledgerFinishSapoJob,
+  SAPO_JOB_MAX_ATTEMPTS,
+  sapoJobKey,
 } = await import("./ledger");
 const { log } = await import("./log");
 
@@ -298,6 +304,162 @@ describe("ledgerPaidParams — what a Sapo retry is built from", () => {
     await ledgerRecordCheckout(pending("PP-4"), db);
     await ledgerRecordPayment("PP-4", "paid", { vnp_ResponseCode: "00" }, db); // no transaction number
     expect(await ledgerPaidParams("PP-4", db)).toBeUndefined();
+  });
+});
+
+describe("ledgerCommitPaid — the payment and its Sapo job in one transaction (PR 6b)", () => {
+  const jobsOf = (ref: string) => db.select().from(schema.outboxJobs).where(eq(schema.outboxJobs.dedupeKey, sapoJobKey(ref)));
+  const attemptOf = async (ref: string) =>
+    (await db.select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.vnpTxnRef, ref)))[0];
+
+  it("marks the attempt and the order paid and queues exactly one Sapo job", async () => {
+    await ledgerRecordCheckout(pending("T-1"), db);
+    expect(await ledgerCommitPaid(pending("T-1", "processing"), PAID, db)).toBe("committed");
+    expect(await attemptOf("T-1")).toMatchObject({ status: "paid", vnpTransactionNo: "15697481", vnpBankCode: "NCB" });
+    expect(await orderOf("T-1")).toMatchObject({ paymentStatus: "paid", orderStatus: "open" });
+    const jobs = await jobsOf("T-1");
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ kind: "create_sapo_order", state: "pending", attempts: 0, payload: { txnRef: "T-1" } });
+  });
+
+  it("answers 'already' to a repeat and never queues a second job", async () => {
+    await ledgerRecordCheckout(pending("T-2"), db);
+    expect(await ledgerCommitPaid(pending("T-2"), PAID, db)).toBe("committed");
+    expect(await ledgerCommitPaid(pending("T-2"), PAID, db)).toBe("already");
+    expect(await ledgerCommitPaid(pending("T-2"), PAID, db)).toBe("already");
+    expect(await jobsOf("T-2")).toHaveLength(1);
+  });
+
+  it("records an order whose checkout write was lost, from the Redis record it is given", async () => {
+    expect(await ledgerCommitPaid(pending("T-3"), PAID, db)).toBe("committed");
+    expect(await orderOf("T-3")).toMatchObject({ paymentStatus: "paid", amountVnd: 80_000 });
+    expect(await jobsOf("T-3")).toHaveLength(1);
+  });
+
+  it("rolls everything back when the database fails half-way: no paid attempt, no job", async () => {
+    await ledgerRecordCheckout(pending("T-BOOM"), db);
+    await client.exec(`
+      CREATE FUNCTION refuse_boom_job() RETURNS trigger AS $$
+      BEGIN IF NEW.dedupe_key LIKE '%T-BOOM' THEN RAISE EXCEPTION 'disk full'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER refuse_boom_job BEFORE INSERT ON outbox_jobs FOR EACH ROW EXECUTE FUNCTION refuse_boom_job();
+    `);
+    try {
+      expect(await ledgerCommitPaid(pending("T-BOOM"), PAID, db)).toBe("unavailable");
+    } finally {
+      await client.exec("DROP TRIGGER refuse_boom_job ON outbox_jobs; DROP FUNCTION refuse_boom_job();");
+    }
+    // The update of the attempt ran before the job insert failed; it must not have survived.
+    expect(await attemptOf("T-BOOM")).toMatchObject({ status: "pending", vnpTransactionNo: null });
+    expect(await orderOf("T-BOOM")).toMatchObject({ paymentStatus: "pending" });
+    expect(await jobsOf("T-BOOM")).toHaveLength(0);
+  });
+
+  it("does not turn a refunded payment back into a paid one", async () => {
+    await ledgerRecordCheckout(pending("T-REF"), db);
+    await db.update(schema.paymentAttempts).set({ status: "refunded" }).where(eq(schema.paymentAttempts.vnpTxnRef, "T-REF"));
+    expect(await ledgerCommitPaid(pending("T-REF"), PAID, db)).toBe("unavailable");
+    expect((await attemptOf("T-REF")).status).toBe("refunded");
+    expect(await jobsOf("T-REF")).toHaveLength(0);
+  });
+
+  it("is 'unavailable', never a throw, with no database, a broken one, or one that never answers", async () => {
+    // No DATABASE_URL in tests, so the default database is absent.
+    expect(await ledgerCommitPaid(pending("T-NODB"), PAID)).toBe("unavailable");
+    const broken = {
+      transaction: () => {
+        throw new Error("connection refused");
+      },
+    } as never;
+    expect(await ledgerCommitPaid(pending("T-BROKEN"), PAID, broken)).toBe("unavailable");
+    _resetLedgerBreaker();
+    vi.useFakeTimers();
+    try {
+      const hangs = { transaction: () => new Promise(() => {}) } as never;
+      const commit = ledgerCommitPaid(pending("T-HANG"), PAID, hangs);
+      await vi.advanceTimersByTimeAsync(LEDGER_TIMEOUT_MS + 10);
+      await expect(commit).resolves.toBe("unavailable");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is 'unavailable' on a database migrated before the dedupe key existed (a preview ahead of production)", async () => {
+    const old = new PGlite();
+    try {
+      const { readFileSync } = await import("node:fs");
+      for (const stmt of readFileSync("./drizzle/0000_ledger.sql", "utf8").split("--> statement-breakpoint")) await old.exec(stmt);
+      const oldDb = drizzle(old, { schema });
+      await ledgerRecordCheckout(pending("T-OLD"), oldDb);
+      expect(await ledgerCommitPaid(pending("T-OLD"), PAID, oldDb)).toBe("unavailable");
+    } finally {
+      await old.close();
+    }
+  });
+});
+
+describe("the Sapo job's life after the commit", () => {
+  const jobOf = async (ref: string) =>
+    (await db.select().from(schema.outboxJobs).where(eq(schema.outboxJobs.dedupeKey, sapoJobKey(ref))))[0];
+
+  it("is done once the Sapo order exists, and then no longer due", async () => {
+    await ledgerCommitPaid(pending("J-1"), PAID, db);
+    expect(await ledgerDueSapoJobs(50, db)).toContain("J-1");
+    await ledgerFinishSapoJob("J-1", db);
+    expect(await jobOf("J-1")).toMatchObject({ state: "done" });
+    expect((await jobOf("J-1")).doneAt).not.toBeNull();
+    expect(await ledgerDueSapoJobs(50, db)).not.toContain("J-1");
+  });
+
+  it("backs off after each failure, keeps only a reason label, and gives up after the last attempt", async () => {
+    await ledgerCommitPaid(pending("J-2"), PAID, db);
+    const first = await ledgerFailSapoJob("J-2", "Sapo answered HTTP 503", db);
+    expect(first).toEqual({ attempts: 1, gaveUp: false });
+    const j = await jobOf("J-2");
+    expect(j).toMatchObject({ state: "pending", attempts: 1, lastError: "Sapo answered HTTP 503" });
+    expect(j.runAfter.getTime()).toBeGreaterThan(Date.now() + 30_000); // not due again at once
+    expect(await ledgerDueSapoJobs(50, db)).not.toContain("J-2");
+
+    let last: Awaited<ReturnType<typeof ledgerFailSapoJob>>;
+    for (let i = 1; i < SAPO_JOB_MAX_ATTEMPTS; i++) last = await ledgerFailSapoJob("J-2", "Sapo answered HTTP 503", db);
+    expect(last!).toEqual({ attempts: SAPO_JOB_MAX_ATTEMPTS, gaveUp: true });
+    expect(await jobOf("J-2")).toMatchObject({ state: "failed" });
+  });
+
+  it("lists a due job by its reference, and a job that has come due again after its back-off", async () => {
+    await ledgerCommitPaid(pending("J-3"), PAID, db);
+    await ledgerFailSapoJob("J-3", "x", db);
+    await db
+      .update(schema.outboxJobs)
+      .set({ runAfter: new Date(Date.now() - 1000) })
+      .where(eq(schema.outboxJobs.dedupeKey, sapoJobKey("J-3")));
+    expect(await ledgerDueSapoJobs(50, db)).toContain("J-3");
+  });
+
+  it("does not move a finished job back, and does nothing for a reference with no job", async () => {
+    await ledgerCommitPaid(pending("J-4"), PAID, db);
+    await ledgerFinishSapoJob("J-4", db);
+    expect(await ledgerFailSapoJob("J-4", "late", db)).toBeUndefined();
+    expect(await jobOf("J-4")).toMatchObject({ state: "done", attempts: 0 });
+    expect(await ledgerFailSapoJob("J-NONE", "x", db)).toBeUndefined();
+    await expect(ledgerFinishSapoJob("J-NONE", db)).resolves.toBeUndefined();
+  });
+
+  it("lists only the jobs of this deployment's Redis namespace, not a preview's in the shared database", async () => {
+    await ledgerCommitPaid(pending("J-MINE"), PAID, db);
+    await ledgerCommitPaid(pending("J-PREVIEW"), PAID, db);
+    await db
+      .update(schema.outboxJobs)
+      .set({ payload: { txnRef: "J-PREVIEW", ns: "preview-some-branch:" } })
+      .where(eq(schema.outboxJobs.dedupeKey, sapoJobKey("J-PREVIEW")));
+    const due = await ledgerDueSapoJobs(50, db);
+    expect(due).toContain("J-MINE");
+    expect(due).not.toContain("J-PREVIEW");
+  });
+
+  it("takes a paid order with a job off the sweep's 'unsynced' list: the job owns its retries", async () => {
+    await ledgerCommitPaid(pending("J-5"), PAID, db);
+    await db.update(schema.orders).set({ createdAt: new Date(Date.now() - 300_000) }).where(eq(schema.orders.webRef, "J-5"));
+    expect((await ledgerSweepCandidates(50, db)).map((c) => c.txnRef)).not.toContain("J-5");
   });
 });
 

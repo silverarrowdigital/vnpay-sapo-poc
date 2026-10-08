@@ -83,6 +83,16 @@ describe("ledger schema", () => {
     expect(j.runAfter.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
   });
 
+  it("refuses a second job with the same dedupe key, but allows any number without one", async () => {
+    const [o] = await db.insert(orders).values(baseOrder("REF-DEDUPE")).returning();
+    await db.insert(outboxJobs).values({ kind: "create_sapo_order", orderId: o.id, dedupeKey: "create_sapo_order:REF-DEDUPE" });
+    await expect(
+      db.insert(outboxJobs).values({ kind: "create_sapo_order", orderId: o.id, dedupeKey: "create_sapo_order:REF-DEDUPE" }),
+    ).rejects.toThrow();
+    await db.insert(outboxJobs).values({ kind: "query_vnpay", orderId: o.id });
+    await db.insert(outboxJobs).values({ kind: "query_vnpay", orderId: o.id });
+  });
+
   it("records an inbox row with its parameters as JSON", async () => {
     await db.insert(webhookInbox).values({ source: "ipn", txnRef: "VNP-1", params: { vnp_ResponseCode: "00" }, rspCode: "00" });
     const [row] = await db.select().from(webhookInbox).where(eq(webhookInbox.txnRef, "VNP-1"));

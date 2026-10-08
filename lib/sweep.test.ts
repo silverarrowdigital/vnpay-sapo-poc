@@ -23,6 +23,8 @@ function deps(over: Partial<Deps> = {}): Deps {
     onGiveUp: async () => undefined,
     now: () => Date.now(),
     isActive: async () => true,
+    dueJobs: async () => [],
+    runJob: vi.fn(async () => "done" as const),
   };
   return { ...base, ...over } as Deps;
 }
@@ -30,7 +32,15 @@ function deps(over: Partial<Deps> = {}): Deps {
 describe("runSweep", () => {
   it("does nothing when there is nothing to do", async () => {
     const d = deps();
-    expect(await runSweep(d.reconcile, d)).toEqual({ candidates: 0, asked: 0, settled: 0, capped: 0, skippedForBudget: 0 });
+    expect(await runSweep(d.reconcile, d)).toEqual({
+      candidates: 0,
+      asked: 0,
+      settled: 0,
+      capped: 0,
+      skippedForBudget: 0,
+      jobs: 0,
+      jobsDone: 0,
+    });
     expect(d.reconcile).not.toHaveBeenCalled();
   });
 
@@ -206,5 +216,66 @@ describe("runSweep", () => {
     expect(r.idle).toBe(true);
     expect(candidates).not.toHaveBeenCalled();
     expect(d.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("runs the due Sapo jobs before asking VNPAY about anything, and counts what they finished", async () => {
+    const order: string[] = [];
+    const d = deps({
+      dueJobs: async () => ["JOB-1", "JOB-2"],
+      runJob: vi.fn(async (ref: string) => {
+        order.push(`job:${ref}`);
+        return ref === "JOB-1" ? ("done" as const) : ("retry" as const);
+      }),
+      candidates: async () => [cand("PENDING-1", "pending")],
+      reconcile: vi.fn(async (ref: string) => {
+        order.push(`ask:${ref}`);
+        return "no_answer";
+      }),
+    });
+    const r = await runSweep(d.reconcile, d);
+    expect(order).toEqual(["job:JOB-1", "job:JOB-2", "ask:PENDING-1"]);
+    expect(r).toMatchObject({ jobs: 2, jobsDone: 1, asked: 1 });
+  });
+
+  it("does not hand a reference to reconcile in the same run its job already handled", async () => {
+    const d = deps({
+      dueJobs: async () => ["BOTH"],
+      candidates: async () => [cand("BOTH", "unsynced")],
+    });
+    await runSweep(d.reconcile, d);
+    expect(d.runJob).toHaveBeenCalledWith("BOTH");
+    expect(d.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("runs at most MAX_PER_RUN jobs, keeps going past one that throws, and still asks VNPAY afterwards", async () => {
+    const refs = Array.from({ length: MAX_PER_RUN + 3 }, (_, i) => `J${i}`);
+    const runJob = vi.fn(async (ref: string) => {
+      if (ref === "J0") throw new Error("boom");
+      return "done" as const;
+    });
+    const d = deps({ dueJobs: async () => refs, runJob, candidates: async () => [cand("P", "pending")] });
+    const r = await runSweep(d.reconcile, d);
+    expect(runJob).toHaveBeenCalledTimes(MAX_PER_RUN);
+    expect(r.jobsDone).toBe(MAX_PER_RUN - 1);
+    expect(d.reconcile).toHaveBeenCalledWith("P");
+  });
+
+  it("still asks VNPAY when the job list cannot be read", async () => {
+    const d = deps({
+      dueJobs: async () => {
+        throw new Error("db down");
+      },
+      candidates: async () => [cand("P", "pending")],
+    });
+    const r = await runSweep(d.reconcile, d);
+    expect(r.jobs).toBe(0);
+    expect(d.reconcile).toHaveBeenCalledWith("P");
+  });
+
+  it("runs no job while idle", async () => {
+    const dueJobs = vi.fn(async () => ["X"]);
+    const d = deps({ dueJobs, isActive: async () => false });
+    await runSweep(d.reconcile, d);
+    expect(dueJobs).not.toHaveBeenCalled();
   });
 });

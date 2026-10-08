@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { Receiver } from "@upstash/qstash";
 import { errorMessage, log } from "@/lib/log";
-import { alertUnsettledPaidReturn, hasPaidReturn, reconcilePendingPayment } from "@/lib/order";
+import { alertUnsettledPaidReturn, hasPaidReturn, reconcilePendingPayment, runSapoJob } from "@/lib/order";
 import { runSweep } from "@/lib/sweep";
 
 export const runtime = "nodejs";
@@ -24,9 +24,14 @@ function sameSecret(given: string | null, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function authorised(request: NextRequest, body: string): Promise<boolean> {
+/** The daily Vercel cron, as opposed to QStash: it ignores the idle hint (see handle). */
+function fromCron(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
-  if (secret && sameSecret(request.headers.get("authorization"), secret)) return true;
+  return secret !== undefined && secret !== "" && sameSecret(request.headers.get("authorization"), secret);
+}
+
+async function authorised(request: NextRequest, body: string): Promise<boolean> {
+  if (fromCron(request)) return true;
 
   const signature = request.headers.get("upstash-signature");
   const current = process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -55,6 +60,10 @@ async function handle(request: NextRequest) {
     const result = await runSweep((txnRef) => reconcilePendingPayment(txnRef, Date.now(), { skipWait: true }), {
       hasPaidReturn,
       onGiveUp: alertUnsettledPaidReturn,
+      runJob: runSapoJob,
+      // The daily cron looks at the database whatever the hint says (one wake-up a day): if the hint was
+      // lost while a paid order's Sapo job was waiting, this is what still finds it.
+      ...(fromCron(request) ? { isActive: async () => true } : {}),
     });
     return NextResponse.json(result);
   } catch (err) {

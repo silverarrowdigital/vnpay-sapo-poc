@@ -7,7 +7,7 @@
  * bare Map keeps live object references, so code that mutated an order and forgot to `put` it would
  * pass here and lose the status on Redis — where a repeat IPN would then create a second Sapo order.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CatalogProduct } from "./product";
 import type { OrderStore } from "./store";
 import { sign, type VnpParams } from "./vnpay";
@@ -23,6 +23,9 @@ vi.mock("./ledger", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ledger")>()),
   ledgerPaidParams: vi.fn(async () => undefined),
 }));
+// No database by default, which is every test above PR 6b's: the ledger is a no-op and the IPN takes
+// the path it always took. The "PR 6b" block below hands the ledger an in-process Postgres.
+vi.mock("./db/client", () => ({ getDb: vi.fn() }));
 vi.mock("./locations", () => ({ resolveAddress: vi.fn() }));
 vi.mock("./discount", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discount")>()),
@@ -66,7 +69,8 @@ const { sendAlert } = await import("./alert");
 const { queryVnpayTransaction } = await import("./querydr");
 const { ledgerPaidParams } = await import("./ledger");
 const { SWEEP_ACTIVE_KEY } = await import("./sweep");
-const { CheckoutError, _resetStore, getOrder, alertUnsettledPaidReturn, handleIpn, lookupOrder, markPaidReturn, quoteTotals, reconcilePendingPayment, startCheckoutOnce, startCheckout, validateCheckout } =
+const { getDb } = await import("./db/client");
+const { CheckoutError, _resetStore, getOrder, alertUnsettledPaidReturn, handleIpn, lookupOrder, markPaidReturn, quoteTotals, reconcilePendingPayment, runSapoJob, startCheckoutOnce, startCheckout, validateCheckout } =
   await import("./order");
 
 const SECRET = "TESTSECRETTESTSECRETTESTSECRET12";
@@ -844,5 +848,259 @@ describe("VNPAY's one-querydr-per-five-minutes limit", () => {
     expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1");
     await markPaidReturn(txnRef);
     expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1");
+  });
+});
+
+const { PGlite } = await import("@electric-sql/pglite");
+const { drizzle } = await import("drizzle-orm/pglite");
+const { migrate } = await import("drizzle-orm/pglite/migrator");
+const { eq } = await import("drizzle-orm");
+const schema = await import("./db/schema");
+const real = await vi.importActual<typeof import("./ledger")>("./ledger");
+const { getOrderStore } = await import("./store");
+
+describe("PR 6b — the IPN records the payment and its Sapo job in one transaction before it answers", () => {
+  let client: InstanceType<typeof PGlite>;
+  let db: ReturnType<typeof drizzle<typeof schema>>;
+  beforeAll(async () => {
+    client = new PGlite();
+    db = drizzle(client, { schema });
+    await migrate(db, { migrationsFolder: "./drizzle" });
+  });
+  afterAll(async () => client.close());
+  beforeEach(() => {
+    real._resetLedgerBreaker();
+    vi.mocked(getDb).mockReturnValue(db as never);
+    // The Sapo retry is built from what the ledger really recorded, not from a canned answer.
+    vi.mocked(ledgerPaidParams).mockImplementation((ref) => real.ledgerPaidParams(ref));
+  });
+
+  async function paidCheckout(): Promise<{ txnRef: string; amountVnd: number }> {
+    catalog(product(1001, 348_000, 68));
+    const started = await startCheckout(input([{ variantId: 1001, quantity: 1 }]), "1.2.3.4");
+    return { txnRef: started.txnRef, amountVnd: 378_000 };
+  }
+  const jobsOf = (ref: string) => db.select().from(schema.outboxJobs).where(eq(schema.outboxJobs.dedupeKey, real.sapoJobKey(ref)));
+  const attemptOf = async (ref: string) =>
+    (await db.select().from(schema.paymentAttempts).where(eq(schema.paymentAttempts.vnpTxnRef, ref)))[0];
+
+  it("answers 00 for a paid order, with the payment recorded, one job, and the job done once Sapo has the order", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    expect(await handleIpn(ipn(txnRef, amountVnd))).toEqual({ RspCode: "00", Message: "Confirm Success" });
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(await attemptOf(txnRef)).toMatchObject({ status: "paid", vnpTransactionNo: "15696152" });
+    const jobs = await jobsOf(txnRef);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].state).toBe("done");
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+
+  it("answers 00 when Sapo fails after the commit, leaving the job to retry and waking the sweep (D1)", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    await getOrderStore().kvDelete(SWEEP_ACTIVE_KEY);
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    expect((await getOrder(txnRef))?.status).toBe("sapo_error");
+    const [job] = await jobsOf(txnRef);
+    expect(job).toMatchObject({ state: "pending", attempts: 1, lastError: "Sapo answered HTTP 503" });
+    expect(sendAlert).toHaveBeenCalledWith("sapo_failed", txnRef, expect.objectContaining({ reason: "Sapo answered HTTP 503" }));
+    expect(await getOrderStore().kvGet(SWEEP_ACTIVE_KEY)).toBe("1");
+  });
+
+  it("answers 02 to a replay of that IPN, adds no job, and finishes the order then", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    await handleIpn(ipn(txnRef, amountVnd));
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("02");
+    expect(await jobsOf(txnRef)).toHaveLength(1);
+    expect((await jobsOf(txnRef))[0].state).toBe("done");
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+    expect(createOrderOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers 02, with one job and one Sapo order, when an earlier IPN committed and died before answering", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    // The earlier IPN: committed, then the server died — Redis never left 'pending'.
+    expect(await real.ledgerCommitPaid((await getOrder(txnRef))!, ipn(txnRef, amountVnd))).toBe("committed");
+    expect((await getOrder(txnRef))?.status).toBe("pending");
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("02");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(await jobsOf(txnRef)).toHaveLength(1);
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+  });
+
+  it("falls back to the old answers when the database is down: 00 if Sapo took the order, 99 if not (D3)", async () => {
+    const down = {
+      transaction: () => {
+        throw new Error("connection refused");
+      },
+      insert: () => {
+        throw new Error("connection refused");
+      },
+      update: () => {
+        throw new Error("connection refused");
+      },
+      select: () => {
+        throw new Error("connection refused");
+      },
+    };
+    const a = await paidCheckout();
+    const b = await paidCheckout();
+    vi.mocked(getDb).mockReturnValue(down as never);
+    expect((await handleIpn(ipn(a.txnRef, a.amountVnd))).RspCode).toBe("00");
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect((await handleIpn(ipn(b.txnRef, b.amountVnd))).RspCode).toBe("99");
+    expect((await getOrder(b.txnRef))?.status).toBe("sapo_error");
+  });
+
+  it("opens no transaction for a forged signature, a wrong amount or an unknown reference", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    expect((await handleIpn({ ...ipn(txnRef, amountVnd), vnp_SecureHash: "a".repeat(128) })).RspCode).toBe("97");
+    expect((await handleIpn(ipn(txnRef, amountVnd + 1))).RspCode).toBe("04");
+    expect((await handleIpn(ipn("20200101000000000009", amountVnd))).RspCode).toBe("01");
+    expect((await attemptOf(txnRef)).status).toBe("pending");
+    expect(await jobsOf(txnRef)).toHaveLength(0);
+    expect(await jobsOf("20200101000000000009")).toHaveLength(0);
+    expect(createOrderOnce).not.toHaveBeenCalled();
+  });
+
+  it("queues no job for a cancelled payment", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    expect((await handleIpn(ipn(txnRef, amountVnd, { vnp_ResponseCode: "24", vnp_TransactionStatus: "02" }))).RspCode).toBe("00");
+    expect(await jobsOf(txnRef)).toHaveLength(0);
+    expect((await attemptOf(txnRef)).status).toBe("cancelled");
+  });
+
+  it("lets only one of two simultaneous IPNs through, with one job and one Sapo order", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const answers = await Promise.all([handleIpn(ipn(txnRef, amountVnd)), handleIpn(ipn(txnRef, amountVnd))]);
+    expect(answers.map((a) => a.RspCode).sort()).toEqual(["00", "99"]);
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    expect(await jobsOf(txnRef)).toHaveLength(1);
+  });
+
+  it("answers 00 when Redis cannot be written after the commit, because the job already holds the payment", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    const store = (await vi.importActual<typeof import("./store")>("./store")).getOrderStore();
+    const put = store.put.bind(store);
+    let writes = 0;
+    const spy = vi.spyOn(store, "put").mockImplementation(async (o) => {
+      writes += 1;
+      if (writes === 1) throw new Error("redis down"); // the 'processing' write
+      return put(o);
+    });
+    try {
+      expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await jobsOf(txnRef)).toHaveLength(1);
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues the job through the querydr door too, which is the same settle", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: true as const, params: ipn(txnRef, amountVnd) });
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("settled");
+    expect((await jobsOf(txnRef))[0]?.state).toBe("done");
+  });
+
+  it("does not call a reconcile 'settled' when the commit held but Sapo refused", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(queryVnpayTransaction).mockResolvedValue({ ok: true as const, params: ipn(txnRef, amountVnd) });
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    expect(await reconcilePendingPayment(txnRef, Date.now(), { skipWait: true })).toBe("no_answer");
+    expect((await jobsOf(txnRef))[0]?.state).toBe("pending");
+  });
+
+  it("runSapoJob finishes a waiting job from the ledger, without asking VNPAY", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValueOnce(new SapoApiError("down", 503));
+    await handleIpn(ipn(txnRef, amountVnd));
+    expect(await runSapoJob(txnRef)).toBe("done");
+    expect(queryVnpayTransaction).not.toHaveBeenCalled();
+    expect((await jobsOf(txnRef))[0]?.state).toBe("done");
+    expect((await getOrder(txnRef))?.status).toBe("completed");
+    expect(createOrderOnce).toHaveBeenCalledTimes(2);
+  });
+
+  it("runSapoJob counts a failed retry and gives up, with one alert, after the last attempt", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValue(new SapoApiError("down", 503));
+    await handleIpn(ipn(txnRef, amountVnd)); // attempt 1
+    for (let i = 1; i < real.SAPO_JOB_MAX_ATTEMPTS; i++) expect(await runSapoJob(txnRef)).toBe("retry");
+    expect((await jobsOf(txnRef))[0]).toMatchObject({ state: "failed", attempts: real.SAPO_JOB_MAX_ATTEMPTS });
+    // The give-up is its own alert kind, so the hourly limit on "sapo_failed" cannot swallow it.
+    expect(sendAlert).toHaveBeenCalledWith("sapo_gave_up", txnRef, expect.objectContaining({ reason: expect.stringMatching(/gave up after 8/) }));
+    expect(vi.mocked(sendAlert).mock.calls.filter((c) => c[0] === "sapo_gave_up")).toHaveLength(1);
+    expect(vi.mocked(sendAlert).mock.calls.filter((c) => c[0] === "sapo_failed").every((c) => !/gave up/.test(c[2]?.reason ?? ""))).toBe(true);
+  });
+
+  it("runSapoJob counts a job the ledger has no usable paid record for, so it cannot hold the front of the queue for ever", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    // Paid, but VNPAY's answer carried no transaction number: ledgerPaidParams cannot rebuild the payment.
+    const { vnp_TransactionNo: _no, ...withoutNumber } = ipn(txnRef, amountVnd);
+    void _no;
+    await real.ledgerCommitPaid((await getOrder(txnRef))!, withoutNumber);
+    for (let i = 0; i < real.SAPO_JOB_MAX_ATTEMPTS; i++) expect(await runSapoJob(txnRef)).toBe("retry");
+    expect((await jobsOf(txnRef))[0]).toMatchObject({ state: "failed", attempts: real.SAPO_JOB_MAX_ATTEMPTS });
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect(sendAlert).toHaveBeenCalledWith("sapo_gave_up", txnRef, expect.anything());
+  });
+
+  it("finishes the order exactly once when the commit lands after the timeout and the old path has already made the order", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    // The IPN's commit "timed out" (unavailable), so it took the old path and Sapo created the order...
+    vi.mocked(getDb).mockReturnValue(undefined);
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("00");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1);
+    // ...and then the abandoned transaction committed after all, leaving a pending job behind.
+    vi.mocked(getDb).mockReturnValue(db as never);
+    real._resetLedgerBreaker();
+    expect(await real.ledgerCommitPaid((await getOrder(txnRef))!, ipn(txnRef, amountVnd))).toBe("committed");
+    expect(await runSapoJob(txnRef)).toBe("done");
+    expect(createOrderOnce).toHaveBeenCalledTimes(1); // Redis says completed: no second Sapo call
+    expect((await jobsOf(txnRef))[0]?.state).toBe("done");
+  });
+
+  it("answers 02 to an IPN for a payment whose job has already given up, and neither retries nor counts", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    vi.mocked(createOrderOnce).mockRejectedValue(new SapoApiError("down", 503));
+    await handleIpn(ipn(txnRef, amountVnd));
+    for (let i = 1; i < real.SAPO_JOB_MAX_ATTEMPTS; i++) await runSapoJob(txnRef);
+    expect((await jobsOf(txnRef))[0].state).toBe("failed");
+    const calls = vi.mocked(createOrderOnce).mock.calls.length;
+    vi.mocked(createOrderOnce).mockResolvedValue({ order: { id: 1, name: "#1001" }, created: true });
+    expect((await handleIpn(ipn(txnRef, amountVnd))).RspCode).toBe("02");
+    expect(vi.mocked(createOrderOnce).mock.calls.length).toBe(calls + 1); // the replay may still finish it
+    expect((await jobsOf(txnRef))[0]).toMatchObject({ attempts: real.SAPO_JOB_MAX_ATTEMPTS }); // not counted again
+  });
+
+  it("runSapoJob marks a job done when Redis says the order is already complete", async () => {
+    const { txnRef, amountVnd } = await paidCheckout();
+    await real.ledgerCommitPaid((await getOrder(txnRef))!, ipn(txnRef, amountVnd));
+    await getOrderStore().put({ ...(await getOrder(txnRef))!, status: "completed" });
+    expect(await runSapoJob(txnRef)).toBe("done");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await jobsOf(txnRef))[0]?.state).toBe("done");
+  });
+
+  it("runSapoJob does not create anything for a reference Redis no longer holds, and counts the attempt", async () => {
+    const ref = "20200101000000000123";
+    await real.ledgerCommitPaid(
+      {
+        txnRef: ref,
+        createdAt: new Date().toISOString(),
+        customer: { name: "A", phone: "0912345678", email: "a@example.com", address: "1" },
+        lines: [],
+        amountVnd: 1000,
+        status: "pending",
+      } as never,
+      ipn(ref, 1000),
+    );
+    expect(await runSapoJob(ref)).toBe("retry");
+    expect(createOrderOnce).not.toHaveBeenCalled();
+    expect((await jobsOf(ref))[0]).toMatchObject({ state: "pending", attempts: 1 });
+    expect(sendAlert).not.toHaveBeenCalledWith("paid_no_order", ref, expect.anything());
   });
 });

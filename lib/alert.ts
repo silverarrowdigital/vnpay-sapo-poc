@@ -32,7 +32,9 @@ export type AlertKind =
   /** A payment succeeded but for a different amount than the order was created with. */
   | "amount_mismatch"
   /** A payment succeeded and the Sapo order could not be created. */
-  | "sapo_failed";
+  | "sapo_failed"
+  /** The background job tried to create the Sapo order 8 times and stopped: only a person can finish it. */
+  | "sapo_gave_up";
 
 export interface AlertDetails {
   /** What VNPAY said was paid, in VND. */
@@ -49,6 +51,7 @@ const SUBJECTS: Record<AlertKind, string> = {
   paid_no_order: "Khách đã trả tiền nhưng hệ thống không có đơn này",
   amount_mismatch: "Khách đã trả tiền nhưng số tiền không khớp đơn",
   sapo_failed: "Khách đã trả tiền nhưng chưa tạo được đơn trong Sapo",
+  sapo_gave_up: "CẦN TẠO ĐƠN THỦ CÔNG: khách đã trả tiền, hệ thống đã thử tạo đơn Sapo nhiều lần và dừng",
 };
 
 const MEANING: Record<AlertKind, string> = {
@@ -57,7 +60,9 @@ const MEANING: Record<AlertKind, string> = {
   amount_mismatch:
     "VNPAY báo thanh toán thành công nhưng số tiền khác số tiền của đơn. Hệ thống đã từ chối xác nhận, nên đơn chưa được tạo.",
   sapo_failed:
-    "Thanh toán đã được xác nhận nhưng việc tạo đơn trong Sapo chưa thành công. VNPAY sẽ gửi lại thông báo (5 phút một lần, tối đa 10 lần) và hệ thống tự thử lại.",
+    "Thanh toán đã được xác nhận nhưng việc tạo đơn trong Sapo chưa thành công. Hệ thống tự thử lại: nếu VNPAY chưa nhận phản hồi thành công thì VNPAY gửi lại thông báo (5 phút một lần, tối đa 10 lần); nếu khoản thanh toán đã được ghi vào sổ thì một job nền thử lại (tối đa 8 lần trong khoảng 80 phút) và VNPAY sẽ không gửi lại nữa.",
+  sapo_gave_up:
+    "Thanh toán đã được xác nhận và ghi vào sổ, nhưng sau 8 lần thử trong khoảng 80 phút, việc tạo đơn trong Sapo vẫn chưa thành công. Hệ thống KHÔNG còn tự thử lại: đơn này cần được tạo thủ công.",
 };
 
 /**
@@ -74,10 +79,19 @@ function nextSteps(kind: AlertKind, txnRef: string): string[] {
     `1. Vào Sapo tìm đơn có tag  vnpay-${txnRef}.  Nếu ĐÃ CÓ đơn thì dừng ở đây: thông báo này là một lần phát lại, không có gì mất.`,
     `2. Hỏi VNPAY chuyện gì đã xảy ra:  npm run querydr -- ${txnRef}`,
   ];
+  if (kind === "sapo_gave_up") {
+    return [
+      ...check,
+      "3. Nếu Sapo chưa có đơn: tạo đơn thủ công trong Sapo cho khách (lấy tên, địa chỉ, sản phẩm từ trang quản trị hoặc hỏi khách), GẮN TAG vnpay-" +
+        txnRef +
+        " và ghi mã giao dịch VNPAY vào ghi chú. Thiếu tag này thì một lần tải lại trang /success hoặc một lần phát lại thông báo có thể tạo thêm đơn thứ hai.",
+      "4. Không dùng npm run refund cho đến khi có đơn Sapo: nó đọc giao dịch từ đơn Sapo. Muốn hoàn tiền khi không có đơn, liên hệ VNPAY (cách làm trên cổng merchant: chưa kiểm chứng).",
+    ];
+  }
   if (kind === "sapo_failed") {
     return [
       ...check,
-      "3. Chờ: hệ thống tự thử lại mỗi lần VNPAY gửi lại thông báo. Nếu sau ~50 phút vẫn chưa có đơn, chạy lại bằng npm run replay-ipn (hướng dẫn trong CLAUDE.md, mục Recovering a paid order). Lưu ý: replay-ipn cần dòng log return.received của đúng giao dịch này (chỉ có nếu trình duyệt của khách đã quay về); nếu không có, phải tạo đơn thủ công.",
+      "3. Chờ: hệ thống tự thử lại (qua VNPAY gửi lại thông báo, hoặc qua job nền nếu khoản thanh toán đã được ghi vào sổ; trường hợp sau sẽ có thư riêng \"CẦN TẠO ĐƠN THỦ CÔNG\" nếu thử hết lần mà vẫn thất bại). Nếu sau ~90 phút vẫn chưa có đơn và không có thư nào nữa, kiểm tra Sapo, rồi chạy lại bằng npm run replay-ipn (hướng dẫn trong CLAUDE.md, mục Recovering a paid order) hoặc tạo đơn thủ công với tag vnpay-" + txnRef + ". Lưu ý: replay-ipn cần dòng log return.received của đúng giao dịch này (chỉ có nếu trình duyệt của khách đã quay về).",
       "   Nếu thư nói Sapo đã trả lời HTTP 2xx nhưng không đọc được, đơn CÓ THỂ đã được tạo: bước 1 sẽ cho biết.",
     ];
   }

@@ -8,6 +8,13 @@
       "when": 1791371820737,
       "tag": "0000_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791434515219,
+      "tag": "0001_outbox_dedupe",
+      "breakpoints": true
     }
   ]
 }

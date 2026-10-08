@@ -36,7 +36,10 @@ import {
 import { queryVnpayTransaction } from "./querydr";
 import { markSweepActiveAfterCheckout, markSweepActiveAfterPaidReturn } from "./sweep";
 import {
+  ledgerCommitPaid,
   ledgerCompare,
+  ledgerFailSapoJob,
+  ledgerFinishSapoJob,
   ledgerPaidParams,
   ledgerRecordCheckout,
   ledgerRecordPayment,
@@ -655,10 +658,24 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
     return { RspCode: "97", Message: "Invalid signature" };
   }
   log.info("ipn.checksum_verified", { txnRef: params.vnp_TxnRef });
-  const result = await settlePayment(params);
-  await ledgerRecordWebhook("ipn", params, result.RspCode);
-  return result;
+  const { RspCode, Message } = await settlePayment(params);
+  await ledgerRecordWebhook("ipn", params, RspCode);
+  // Only these two fields: the answer is serialised to VNPAY as is.
+  return { RspCode, Message };
 }
+
+/**
+ * What `settlePayment` tells its callers inside this file, beyond VNPAY's answer. Since PR 6b a `00` no
+ * longer means "Sapo has the order" — a durable payment whose Sapo order failed is also `00` — so the
+ * querydr path and the job runner read `sapo` to know whether the order was really finished.
+ */
+interface SettleResult extends IpnResponse {
+  /** Set when this call tried Sapo: whether the order now exists there. */
+  sapo?: "created" | "failed";
+}
+
+const CONFIRMED: IpnResponse = { RspCode: "00", Message: "Confirm Success" };
+const ALREADY_CONFIRMED: IpnResponse = { RspCode: "02", Message: "Order already confirmed" };
 
 /**
  * The rest of the IPN: order exists → amount matches → not already confirmed → apply the result.
@@ -668,7 +685,7 @@ export async function handleIpn(params: VnpParams): Promise<IpnResponse> {
  *
  * The caller must already have verified the signature of whatever `params` came from.
  */
-async function settlePayment(params: VnpParams): Promise<IpnResponse> {
+async function settlePayment(params: VnpParams): Promise<SettleResult> {
   const txnRef = params.vnp_TxnRef ?? "";
   const store = getOrderStore();
 
@@ -762,8 +779,16 @@ async function notifyOwner(kind: AlertKind, txnRef: string, details: AlertDetail
   }
 }
 
-/** Applies a verified IPN to an order the caller already holds the claim for. */
-async function applyIpnResult(store: OrderStore, order: PendingOrder, params: VnpParams): Promise<IpnResponse> {
+/**
+ * Applies a verified IPN to an order the caller already holds the claim for.
+ *
+ * A successful payment is first made durable in the ledger together with its Sapo job
+ * (`ledgerCommitPaid`, PR 6b). VNPAY is then told `00` (or `02` if the ledger already had it) **even if
+ * Sapo fails**, because the job — run by the sweep, through this same function — finishes the order. If
+ * the ledger cannot confirm the commit, everything below behaves exactly as it did before PR 6b: `00`
+ * only once Sapo has the order, `99` otherwise so that VNPAY retries.
+ */
+async function applyIpnResult(store: OrderStore, order: PendingOrder, params: VnpParams): Promise<SettleResult> {
   const txnRef = order.txnRef;
   order.vnpResponseCode = params.vnp_ResponseCode;
   order.vnpTransactionNo = params.vnp_TransactionNo;
@@ -788,15 +813,23 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
   }
 
   order.status = "processing";
+  const ledger = await ledgerCommitPaid(order, params);
+  const durable = ledger !== "unavailable";
+  // The answer once the payment is durable: 02 when the ledger already had it (a replay, or an earlier
+  // IPN that committed and then died before it could answer), else 00.
+  const durableAnswer = ledger === "already" ? ALREADY_CONFIRMED : CONFIRMED;
+  log.info(durable ? "ipn.ledger_committed" : "ipn.ledger_fallback", { txnRef, ledger });
+
   try {
     await store.put(order);
   } catch (err) {
-    // Without a recorded "processing" we would lose track of an order we are about to create in
-    // Sapo. Stop here and let VNPAY retry instead.
     log.error("ipn.store_write_failed", { txnRef, status: order.status, error: errorMessage(err) });
-    return { RspCode: "99", Message: "Unknown error" };
+    // Without a recorded "processing" we would lose track of an order we are about to create in
+    // Sapo — unless the ledger already holds the payment and its job. Without that, stop here and let
+    // VNPAY retry instead.
+    if (!durable) return { RspCode: "99", Message: "Unknown error" };
   }
-  await ledgerRecordPayment(txnRef, "paid", params);
+  if (!durable) await ledgerRecordPayment(txnRef, "paid", params);
 
   try {
     const sapo = getSapoConfig();
@@ -815,9 +848,10 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
       sapoOrderId: sapoOrder.id,
       sapoOrderName: sapoOrder.name,
     });
+    await ledgerFinishSapoJob(txnRef);
     await ledgerRecordSapo(txnRef, { ok: true, id: sapoOrder.id, name: sapoOrder.name });
     await ledgerCompare(order);
-    return { RspCode: "00", Message: "Confirm Success" };
+    return { ...(durable ? durableAnswer : CONFIRMED), sapo: "created" };
   } catch (err) {
     order.status = "sapo_error";
     order.lastError = errorMessage(err);
@@ -830,16 +864,84 @@ async function applyIpnResult(store: OrderStore, order: PendingOrder, params: Vn
     }
     await ledgerRecordSapo(txnRef, { ok: false });
     await ledgerCompare(order);
-    // Told once per hour per order, however many times VNPAY retries. The reason is the HTTP status
-    // only: a Sapo response body can carry the customer's details.
-    await notifyOwner("sapo_failed", txnRef, {
+    // The reason is the HTTP status only: a Sapo response body can carry the customer's details.
+    let reason = describeSapoFailure(err, order);
+    let kind: AlertKind = "sapo_failed";
+    if (durable) {
+      // The job owns the retries now. Count this try, and keep the sweep awake to run the next one.
+      const counted = await ledgerFailSapoJob(txnRef, reason);
+      await markSweepActiveAfterPaidReturn();
+      if (counted?.gaveUp) {
+        kind = "sapo_gave_up";
+        reason = `${reason}; gave up after ${counted.attempts} tries`;
+      }
+    }
+    // Told once per hour per order and kind. The give-up has its own kind: sharing "sapo_failed" let the
+    // hourly limit swallow it, and it is the one mail that says "create the order by hand".
+    await notifyOwner(kind, txnRef, {
       amountVnd: order.amountVnd,
       vnpTransactionNo: order.vnpTransactionNo,
-      reason: describeSapoFailure(err, order),
+      reason,
     });
-    // Payment is verified but the Sapo order is not created yet: answer 99 so VNPAY
-    // retries the IPN (up to 10 times, every 5 minutes per the docs), which retries Sapo.
-    return { RspCode: "99", Message: "Unknown error" };
+    // Durable: VNPAY need not retry, the job will (D1). Not durable: answer 99 so VNPAY retries the
+    // IPN (up to 10 times, every 5 minutes per the docs), which retries Sapo.
+    if (durable) return { ...durableAnswer, sapo: "failed" };
+    return { RspCode: "99", Message: "Unknown error", sapo: "failed" };
+  }
+}
+
+/** What one run of a waiting Sapo job came to. */
+export type SapoJobOutcome = "done" | "retry";
+
+/** Count a try that did not finish the order; mail the owner when it was the last one allowed. */
+async function failSapoJob(txnRef: string, reason: string, amountVnd?: number): Promise<void> {
+  const counted = await ledgerFailSapoJob(txnRef, reason);
+  if (counted?.gaveUp) {
+    await notifyOwner("sapo_gave_up", txnRef, { amountVnd, reason: `${reason}; gave up after ${counted.attempts} tries` });
+  }
+}
+
+/**
+ * Run one waiting `create_sapo_order` job (PR 6b): called by the sweep for a payment the ledger holds as
+ * paid whose Sapo order does not exist yet. It goes through `settlePayment` with the payment the ledger
+ * recorded from VNPAY's signed message — the same door as an IPN, the same amount check, claim and Sapo
+ * duplicate guard, and no new decision about whether the customer paid (security rule 2). Never throws.
+ */
+export async function runSapoJob(txnRef: string): Promise<SapoJobOutcome> {
+  try {
+    const store = getOrderStore();
+    const order = await store.get(txnRef);
+    if (order?.status === "completed") {
+      await ledgerFinishSapoJob(txnRef);
+      return "done";
+    }
+    if (order === undefined) {
+      // Nothing to build the Sapo order from (the 7-day Redis record is gone). Counted, so it ends in the
+      // owner's mail instead of retrying for ever; never a "paid, no order" mail for every run.
+      await failSapoJob(txnRef, "no stored order for this reference (the Redis record expired?)");
+      return "retry";
+    }
+    const recorded = await ledgerPaidParams(txnRef);
+    // The ledger listed this job but has no usable paid record (unreadable now, no transaction number, or
+    // the payment was refunded). Counted like any failed try: an uncounted job would keep the oldest slot
+    // in every run for ever and starve the rest; counted, it ends in the owner's mail.
+    if (recorded === undefined) {
+      await failSapoJob(txnRef, "the ledger has no usable paid record for this job", order.amountVnd);
+      return "retry";
+    }
+    const res = await settlePayment(recorded);
+    if (res.sapo === "created" || (await store.get(txnRef))?.status === "completed") {
+      await ledgerFinishSapoJob(txnRef);
+      return "done";
+    }
+    // A failed Sapo try was already counted inside settlePayment; anything else (another caller holds the
+    // claim, the order is in a state that cannot be settled) is counted here so it cannot loop for ever.
+    if (res.sapo !== "failed") await failSapoJob(txnRef, `not settled (answer ${res.RspCode})`, order.amountVnd);
+    return "retry";
+  } catch (err) {
+    log.error("sapo_job.unexpected_error", { txnRef, error: errorMessage(err) });
+    await failSapoJob(txnRef, "internal error while running the job (see the server log)").catch(() => undefined);
+    return "retry";
   }
 }
 
@@ -921,6 +1023,14 @@ export function isReconcilable(status: OrderStatus): boolean {
 export type ReconcileOutcome = "skipped" | "throttled" | "no_answer" | "not_paid" | "settled";
 
 /**
+ * "settled" only when the order is really finished. Since PR 6b a durable payment whose Sapo order failed
+ * is answered 00 to VNPAY, which must not count as settled here: its job is still waiting.
+ */
+function settledOutcome(res: SettleResult): ReconcileOutcome {
+  return (res.RspCode === "00" || res.RspCode === "02") && res.sapo !== "failed" ? "settled" : "no_answer";
+}
+
+/**
  * Ask VNPAY itself whether a still-pending VNPAY order was paid, and settle it if so.
  *
  * Called by the result page when the browser came back from VNPAY with a verified "paid" return and
@@ -981,8 +1091,7 @@ export async function reconcilePendingPayment(
         // The attempt's amount was copied from this order at checkout, so settlePayment's amount check is
         // not an independent test here. What makes this safe is that the attempt is `paid` only because
         // the original IPN or querydr passed the amount check against VNPAY's own figure first.
-        const res = await settlePayment(recorded);
-        return res.RspCode === "00" || res.RspCode === "02" ? "settled" : "no_answer";
+        return settledOutcome(await settlePayment(recorded));
       }
     }
 
@@ -1008,8 +1117,8 @@ export async function reconcilePendingPayment(
     log.warn("querydr.paid_without_ipn", { txnRef, ageSeconds: Math.round(age / 1000) });
     const res = await settlePayment(answer.params);
     await ledgerRecordWebhook("querydr", answer.params, res.RspCode);
-    log.info("querydr.settled", { txnRef, rspCode: res.RspCode });
-    return res.RspCode === "00" || res.RspCode === "02" ? "settled" : "no_answer";
+    log.info("querydr.settled", { txnRef, rspCode: res.RspCode, sapo: res.sapo });
+    return settledOutcome(res);
   } catch (err) {
     log.error("querydr.unexpected_error", { txnRef, error: errorMessage(err) });
     return "no_answer";

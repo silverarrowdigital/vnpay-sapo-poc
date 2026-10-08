@@ -13,13 +13,16 @@
  * - a payment that is `paid` but whose Sapo order is not `created` (Sapo failed, and with no IPN
  *   there is no VNPAY retry to try again).
  *
+ * Before either, it runs the due `create_sapo_order` jobs (PR 6b): a payment the IPN made durable in the
+ * ledger and answered `00` for, whose Sapo order failed. Those need no VNPAY call.
+ *
  * It is driven from outside (QStash every five minutes; a daily Vercel cron also calls it, but it only
  * sees the last two hours, so that is a heartbeat, not a substitute if QStash stops),
  * and is bounded on every axis so a bad day cannot turn it into a loop that hammers VNPAY or Sapo:
  * at most `MAX_PER_RUN` references a run, each asked about at most `MAX_ASKS_*` times in total (the
  * counter lives in the shared store), and a wall-clock budget for the whole run.
  */
-import { ledgerSweepCandidates, type SweepCandidate } from "./ledger";
+import { ledgerDueSapoJobs, ledgerSweepCandidates, type SweepCandidate } from "./ledger";
 import { errorMessage, log } from "./log";
 import { getOrderStore } from "./store";
 
@@ -84,6 +87,10 @@ export interface SweepDeps {
   now: () => number;
   /** Is there any reason to open a database connection? See SWEEP_ACTIVE_KEY. */
   isActive: () => Promise<boolean>;
+  /** References whose `create_sapo_order` job is due (PR 6b). */
+  dueJobs: () => Promise<string[]>;
+  /** `runSapoJob` in production; injected for the same reason as `reconcile`. */
+  runJob: (txnRef: string) => Promise<"done" | "retry">;
 }
 
 export interface SweepResult {
@@ -94,6 +101,9 @@ export interface SweepResult {
   settled: number;
   capped: number;
   skippedForBudget: number;
+  /** Sapo jobs run this time, and how many of them finished the order. */
+  jobs: number;
+  jobsDone: number;
 }
 
 const defaultDeps = (reconcile: SweepDeps["reconcile"]): SweepDeps => ({
@@ -108,6 +118,9 @@ const defaultDeps = (reconcile: SweepDeps["reconcile"]): SweepDeps => ({
   now: () => Date.now(),
   // If the store cannot say, assume active: an unneeded query is cheaper than a missed payment.
   isActive: async () => (await getOrderStore().kvGet(SWEEP_ACTIVE_KEY).catch(() => "1")) !== undefined,
+  dueJobs: () => ledgerDueSapoJobs(MAX_PER_RUN),
+  // No runner given (lib/sweep.ts cannot import lib/order.ts, which imports it): leave the jobs alone.
+  runJob: async () => "retry",
 });
 
 export async function runSweep(
@@ -115,12 +128,40 @@ export async function runSweep(
   overrides: Partial<SweepDeps> = {},
 ): Promise<SweepResult> {
   const deps: SweepDeps = { ...defaultDeps(reconcile), ...overrides };
-  const result: SweepResult = { candidates: 0, asked: 0, settled: 0, capped: 0, skippedForBudget: 0 };
+  const result: SweepResult = { candidates: 0, asked: 0, settled: 0, capped: 0, skippedForBudget: 0, jobs: 0, jobsDone: 0 };
   const started = deps.now();
   if (!(await deps.isActive())) {
     log.info("sweep.run", { idle: true });
     return { ...result, idle: true };
   }
+
+  // First the Sapo jobs (PR 6b): each is a customer whose payment is already confirmed and recorded, and
+  // running one needs no VNPAY call, so it never competes for the terminal's querydr slot.
+  const handled = new Set<string>();
+  let jobs: string[] = [];
+  try {
+    jobs = await deps.dueJobs();
+  } catch (err) {
+    log.error("sweep.jobs_failed", { error: errorMessage(err) });
+  }
+  for (const ref of jobs) {
+    if (result.jobs >= MAX_PER_RUN) break;
+    if (deps.now() - started > RUN_BUDGET_MS) {
+      result.skippedForBudget++;
+      continue;
+    }
+    handled.add(ref);
+    result.jobs++;
+    try {
+      if ((await deps.runJob(ref)) === "done") {
+        result.jobsDone++;
+        log.warn("sweep.job_done", { txnRef: ref });
+      }
+    } catch (err) {
+      log.error("sweep.job_failed", { txnRef: ref, error: errorMessage(err) });
+    }
+  }
+
   let list: SweepCandidate[];
   try {
     list = await deps.candidates();
@@ -128,6 +169,8 @@ export async function runSweep(
     log.error("sweep.candidates_failed", { error: errorMessage(err) });
     return result;
   }
+  // A reference its job just handled is not handed to reconcile in the same run.
+  list = list.filter((c) => !handled.has(c.txnRef));
   result.candidates = list.length;
 
   // The terminal allows about one querydr every five minutes (lib/querydr.ts), so the order matters more

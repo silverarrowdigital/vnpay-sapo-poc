@@ -19,6 +19,10 @@
  *    set to `failed` by a late or replayed notification, and a Sapo order that is `created` is not set
  *    to `failed` by a stale attempt that landed after a timeout.
  *
+ * **One exception since PR 6b:** `ledgerCommitPaid` is what lets the IPN answer `00` before Sapo has the
+ * order. It still never throws or blocks — it reports `unavailable` and the IPN falls back to the path it
+ * had before — but when it reports `committed` the payment and its Sapo job are durable, together.
+ *
  * `ledgerCompare` is the evidence for PR 6: after an order settles it reads the ledger back and logs
  * `ledger.mismatch` if Postgres disagrees with Redis. PR 6 does not start until that line has stayed
  * silent over real orders created after the first deploy of this file.
@@ -30,12 +34,12 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { getDb } from "./db/client";
 import * as schema from "./db/schema";
 import { errorMessage, log } from "./log";
-import type { PendingOrder } from "./store";
+import { _keyNamespace, type PendingOrder } from "./store";
 import type { VnpParams } from "./vnpay";
 
 export type LedgerDb = PgDatabase<PgQueryResultHKT, typeof schema>;
 
-const { orders, paymentAttempts, sapoMappings, webhookInbox } = schema;
+const { orders, outboxJobs, paymentAttempts, sapoMappings, webhookInbox } = schema;
 
 /**
  * Longest a ledger call may hold up a payment. A cold Neon compute wakes in a few hundred ms; this is
@@ -193,6 +197,191 @@ export async function ledgerRecordPayment(
   );
 }
 
+// ---------------------------------------------------------------------------
+// PR 6b: the payment and its Sapo job, committed together before the IPN answers
+// ---------------------------------------------------------------------------
+
+export const SAPO_JOB_KIND = "create_sapo_order";
+/** After this many failed tries the job is `failed` and the owner is told (lib/order.ts). */
+export const SAPO_JOB_MAX_ATTEMPTS = 8;
+/**
+ * Minutes before the next try after the 1st…7th failure: about 83 minutes in all, inside the two hours
+ * a signed-"paid" hint keeps the sweep awake (lib/sweep.ts), which every failure renews.
+ */
+const SAPO_JOB_BACKOFF_MINUTES = "{1,2,5,10,15,20,30}";
+
+/** The job's unique key: one Sapo order per reference, enforced by the database. */
+export function sapoJobKey(txnRef: string): string {
+  return `${SAPO_JOB_KIND}:${txnRef}`;
+}
+
+/**
+ * - `committed`: this call moved the payment to paid and queued the job, atomically.
+ * - `already`: the ledger already had the payment as paid (an earlier IPN or retry got here first); the
+ *   job is guaranteed to exist, nothing else changed.
+ * - `unavailable`: nothing is known to be durable — no database, open breaker, error (rolled back),
+ *   timeout, a schema without the dedupe key, or a payment already refunded. The caller must then behave
+ *   exactly as before PR 6b.
+ */
+export type CommitPaidResult = "committed" | "already" | "unavailable";
+
+/**
+ * Record a verified successful payment and queue its Sapo order in **one transaction**, so that either
+ * both are durable or neither is. The IPN answers VNPAY `00` on the strength of this even when Sapo then
+ * fails: the job, not VNPAY's retry, finishes the order (docs/plan/T14-6b-ipn-ghi-so-truoc.md).
+ *
+ * The order and its attempt are upserted from the Redis record first, so a payment whose checkout write
+ * to the ledger was lost (a cold database at checkout) still becomes durable here.
+ *
+ * On a timeout the transaction may still commit later; the caller then also takes the old path, and the
+ * job's dedupe key plus the Sapo tag lookup keep that from making a second order.
+ */
+export async function ledgerCommitPaid(order: PendingOrder, params: VnpParams, db?: LedgerDb): Promise<CommitPaidResult> {
+  const txnRef = order.txnRef;
+  const result = await guarded<CommitPaidResult | "refunded">(
+    "commit_paid",
+    txnRef,
+    "unavailable",
+    (d) =>
+      d.transaction(async (tx) => {
+        await tx
+          .insert(orders)
+          .values({
+            webRef: txnRef,
+            customer: order.customer,
+            lines: order.lines,
+            goodsVnd: order.goodsVnd ?? order.amountVnd,
+            discount: order.discount ?? null,
+            shipping: order.shipping ?? null,
+            amountVnd: order.amountVnd,
+            paymentMethod: order.paymentMethod ?? "vnpay",
+          })
+          .onConflictDoNothing({ target: orders.webRef });
+        const [o] = await tx.select({ id: orders.id }).from(orders).where(eq(orders.webRef, txnRef));
+        if (o === undefined) throw new Error("ledger order row missing after upsert");
+        await tx
+          .insert(paymentAttempts)
+          .values({ orderId: o.id, vnpTxnRef: txnRef, amountVnd: order.amountVnd })
+          .onConflictDoNothing({ target: paymentAttempts.vnpTxnRef });
+        // Locked until commit: a concurrent commit for the same reference waits here, then sees `paid`.
+        const [a] = await tx
+          .select({ status: paymentAttempts.status })
+          .from(paymentAttempts)
+          .where(eq(paymentAttempts.vnpTxnRef, txnRef))
+          .for("update");
+        if (a === undefined) throw new Error("ledger payment attempt missing after upsert");
+        if (a.status === "refunded") return "refunded";
+        const already = a.status === "paid";
+        if (!already) {
+          await tx
+            .update(paymentAttempts)
+            .set({
+              status: "paid",
+              vnpTransactionNo: params.vnp_TransactionNo ?? null,
+              vnpBankCode: params.vnp_BankCode ?? null,
+              vnpPayDate: params.vnp_PayDate ?? null,
+              vnpResponseCode: params.vnp_ResponseCode ?? null,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(paymentAttempts.vnpTxnRef, txnRef));
+          await tx
+            .update(orders)
+            .set({ paymentStatus: "paid", orderStatus: "open", updatedAt: sql`now()` })
+            .where(eq(orders.id, o.id));
+        }
+        await tx
+          .insert(outboxJobs)
+          .values({ kind: SAPO_JOB_KIND, orderId: o.id, dedupeKey: sapoJobKey(txnRef), payload: { txnRef, ns: _keyNamespace() } })
+          .onConflictDoNothing({ target: outboxJobs.dedupeKey });
+        return already ? "already" : "committed";
+      }),
+    db,
+  );
+  if (result === "refunded") {
+    log.warn("ledger.commit_refused", { txnRef, reason: "payment already refunded" });
+    return "unavailable";
+  }
+  return result;
+}
+
+/** The Sapo order exists: the job is done. Never moves a job that is already done. */
+export async function ledgerFinishSapoJob(txnRef: string, db?: LedgerDb): Promise<void> {
+  await guarded(
+    "job_done",
+    txnRef,
+    undefined,
+    async (d) => {
+      await d
+        .update(outboxJobs)
+        .set({ state: "done", doneAt: sql`now()`, lockedUntil: null })
+        .where(and(eq(outboxJobs.dedupeKey, sapoJobKey(txnRef)), ne(outboxJobs.state, "done")));
+    },
+    db,
+  );
+}
+
+/**
+ * A try at the Sapo order failed. Counts it, stores `reason` (a label such as "Sapo answered HTTP 503" —
+ * never a response body, which can carry the customer's details) and sets the next try; the last allowed
+ * failure makes the job `failed`. `undefined` when there is no waiting job (none, already done, already
+ * failed) or the ledger cannot be written.
+ */
+export async function ledgerFailSapoJob(
+  txnRef: string,
+  reason: string,
+  db?: LedgerDb,
+): Promise<{ attempts: number; gaveUp: boolean } | undefined> {
+  return guarded(
+    "job_failed",
+    txnRef,
+    undefined as { attempts: number; gaveUp: boolean } | undefined,
+    async (d) => {
+      const [row] = await d
+        .update(outboxJobs)
+        .set({
+          attempts: sql`${outboxJobs.attempts} + 1`,
+          lastError: reason.slice(0, 200),
+          state: sql`case when ${outboxJobs.attempts} + 1 >= ${SAPO_JOB_MAX_ATTEMPTS} then 'failed' else 'pending' end`,
+          runAfter: sql`now() + (${SAPO_JOB_BACKOFF_MINUTES}::int[])[least(${outboxJobs.attempts} + 1, 7)] * interval '1 minute'`,
+        })
+        .where(and(eq(outboxJobs.dedupeKey, sapoJobKey(txnRef)), eq(outboxJobs.state, "pending")))
+        .returning({ attempts: outboxJobs.attempts, state: outboxJobs.state });
+      return row === undefined ? undefined : { attempts: row.attempts, gaveUp: row.state === "failed" };
+    },
+    db,
+  );
+}
+
+/** References whose Sapo job is waiting and due, the longest-waiting first. An unreadable ledger yields none. */
+export async function ledgerDueSapoJobs(limit: number, db?: LedgerDb): Promise<string[]> {
+  return guarded(
+    "jobs_due",
+    null,
+    [] as string[],
+    async (d) => {
+      const rows = await d
+        .select({ key: outboxJobs.dedupeKey })
+        .from(outboxJobs)
+        .where(
+          and(
+            eq(outboxJobs.kind, SAPO_JOB_KIND),
+            eq(outboxJobs.state, "pending"),
+            sql`${outboxJobs.runAfter} <= now()`,
+            // Production and Preview share this database but not Redis: a job belongs to the deployment
+            // whose Redis holds the order it needs, and another one's would only fail and alarm.
+            sql`coalesce(${outboxJobs.payload}->>'ns', '') = ${_keyNamespace()}`,
+          ),
+        )
+        .orderBy(outboxJobs.runAfter)
+        .limit(limit);
+      const prefix = `${SAPO_JOB_KIND}:`;
+      return rows.flatMap((r) => (r.key?.startsWith(prefix) ? [r.key.slice(prefix.length)] : []));
+    },
+    db,
+    false,
+  );
+}
+
 /** What happened in Sapo: the order exists there, or creating it failed (never undoing a created one). */
 export async function ledgerRecordSapo(
   txnRef: string,
@@ -325,7 +514,9 @@ export async function ledgerSweepCandidates(limit: number, db?: LedgerDb): Promi
           sql`(${orders.paymentMethod} = 'vnpay' and ${orders.paymentStatus} = 'pending'
                and ${orders.createdAt} < now() - interval '60 seconds' and ${orders.createdAt} > now() - interval '2 hours')
               or (${orders.paymentStatus} = 'paid' and ${orders.integrationStatus} <> 'created'
-               and ${orders.createdAt} < now() - interval '60 seconds' and ${orders.createdAt} > now() - interval '2 hours')`,
+               and ${orders.createdAt} < now() - interval '60 seconds' and ${orders.createdAt} > now() - interval '2 hours'
+               and not exists (select 1 from ${outboxJobs} where ${outboxJobs.orderId} = ${orders.id}
+                               and ${outboxJobs.kind} = ${SAPO_JOB_KIND}))`,
         )
         .orderBy(desc(orders.createdAt))
         .limit(limit);

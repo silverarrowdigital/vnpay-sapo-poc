@@ -1,8 +1,9 @@
 # T14 — Sổ giao dịch trên Postgres (PR 4–6 của kế hoạch sprint)
 
-**Trạng thái (2026-10-07): PR 4 xong. PR 5 xong và đã kiểm chứng trên production. PR 6 xong ở dạng "quét đơn" (sweep); PR 6b
-(IPN ghi sổ trong một transaction rồi mới trả lời VNPAY) CHƯA làm.** Neon đã được chủ tài khoản bật (Production và Preview dùng
-chung **một** database). Còn lại: PR 6b, đọc từ Postgres thay Redis, PR 7–10 (xem cuối trang).
+**Trạng thái (2026-10-08): PR 4 xong. PR 5 xong và đã kiểm chứng trên production. PR 6 xong ở dạng "quét đơn" (sweep). PR 6b
+(IPN ghi sổ trong một transaction rồi mới trả lời VNPAY) đã code và đã review, CHƯA commit, CHƯA deploy, mới có unit test (xem
+[T14-6b](T14-6b-ipn-ghi-so-truoc.md)).** Neon đã được chủ tài khoản bật (Production và Preview dùng chung **một** database).
+Còn lại: deploy và kiểm 6b bằng một thanh toán sandbox thật, đọc từ Postgres thay Redis, PR 7–10 (xem cuối trang).
 
 ## Vì sao cần
 
@@ -29,7 +30,7 @@ Quyết định về dữ liệu khách (câu 2 cũ): **giữ 90 ngày** rồi x
 | `orders` | một đơn của khách: dòng hàng, tổng, địa chỉ, **4 trạng thái riêng** | cột `purge_after` mặc định now()+90 ngày |
 | `payment_attempts` | mỗi lần bấm thanh toán | `vnp_txn_ref` **duy nhất** |
 | `webhook_inbox` | mỗi IPN/querydr nhận được, nguyên văn đã **bỏ chữ ký** | để đối soát, không dùng để quyết định |
-| `outbox_jobs` | việc cần làm | **đã tạo bảng, CHƯA dùng** (dành cho PR 6b) |
+| `outbox_jobs` | việc cần làm | đã tạo bảng ở PR 4; **PR 6b dùng** làm hàng đợi việc `create_sapo_order` (thêm cột `dedupe_key` + index duy nhất, migration `0001_outbox_dedupe.sql`; chưa deploy) |
 | `sapo_mappings` | `order_id` ↔ đơn Sapo | |
 
 Migration chạy ở đầu `npm run build` (`scripts/migrate.mjs`): **không bao giờ làm hỏng build**, **bỏ qua khi build preview** (vì
@@ -42,7 +43,7 @@ preview dùng chung database production), hết hạn kết nối 10 giây, tổ
 | **4** | Lược đồ + migration + `lib/db/client.ts` (commit `be7dbb9`) | ✅ Xong. Log build Vercel: "migrate: schema is up to date" trên Neon |
 | **5** | `lib/ledger.ts` ghi đơn, thanh toán, kết quả Sapo, bằng chứng webhook vào Postgres song song với Redis; xoá dữ liệu khách sau 90 ngày (commit `511d65e`) | ✅ Xong và **đã kiểm chứng trên production** (xem dưới) |
 | **6** | `lib/sweep.ts` + `app/api/jobs/sweep/route.ts`: tự quét đơn VNPAY chờ và đơn đã trả tiền nhưng chưa vào Sapo, kể cả khi khách đã đóng tab (commit `a41c659`) | ✅ Xong code, đã chạy trên production; **chưa từng cứu một đơn mất IPN thật** |
-| **6b** | IPN ghi trạng thái thanh toán + job `create_sapo_order` **trong một transaction trước khi trả `00`**, dùng `outbox_jobs` | ❌ **Chưa làm** |
+| **6b** | IPN ghi trạng thái thanh toán + job `create_sapo_order` **trong một transaction trước khi trả `00`**, dùng `outbox_jobs` | 🔧 **Đã code và review (2026-10-08), chưa commit, chưa deploy, mới có unit test** (229 test đạt ở máy; chưa chạy với Neon hay production). Xem [T14-6b](T14-6b-ipn-ghi-so-truoc.md) |
 
 Mỗi PR: `npm test`, `typecheck`, `lint`, `build`; `reviewer` bắt buộc (chạm `lib/order.ts`, `lib/store.ts`); `doc-writer`; hỏi
 trước khi push vì push là deploy.
@@ -98,8 +99,9 @@ việc Resend nhận trường `reply_to` **chưa kiểm chứng**.
 
 ## Còn lại
 
-- **PR 6b**: IPN ghi thanh toán + job trong một transaction **trước** khi trả `00` (dùng `outbox_jobs`). Đây là bước đóng hẳn lỗ
-  hổng "VNPAY nhận `00` rồi máy chủ chết".
+- **PR 6b**: đã code (IPN ghi thanh toán + job trong một transaction **trước** khi trả `00`). Còn: commit, deploy (hỏi trước), xem
+  log build có "migrate: schema is up to date", một thanh toán sandbox thật, đo độ trễ IPN. Chỉ sau đó mới coi là đóng lỗ hổng
+  "VNPAY nhận `00` rồi máy chủ chết".
 - Chuyển nguồn đọc từ Redis sang Postgres (chỉ khi log không còn lệch).
 - PR 7–10 của kế hoạch sprint (gồm nhánh Neon riêng cho mỗi preview, rồi mới bật migration trên preview).
 
@@ -109,4 +111,11 @@ việc Resend nhận trường `reply_to` **chưa kiểm chứng**.
   phải ghi thành công trước khi trả `00`.
 - **Giới hạn gọi Sapo (bộ đệm 40 lệnh, đo 2026-10-07):** các lần thử lại phải có giãn cách. Sweep đã bị chặn theo số lần và theo ngân sách thời gian.
 - **Neon khởi động nguội:** lần gọi đầu sau lúc rảnh mất khoảng 2 giây (đo trên production, làm IPN chậm lên 5,5 giây). VNPAY vẫn
-  nhận được `00`, nhưng cần xem lại khi làm PR 6b vì khi đó việc ghi nằm **trước** câu trả lời.
+  nhận được `00`, nhưng cần xem lại khi làm PR 6b vì khi đó việc ghi nằm **trước** câu trả lời. Transaction của 6b bị chặn ở 4 giây
+  rồi về đường cũ; **độ trễ thật chưa đo**, và **chưa biết VNPAY chờ câu trả lời IPN bao lâu**.
+- **PR 6b, những điều CHƯA kiểm chứng (2026-10-08):** chưa chạy với Neon hay trên production; chưa có thanh toán sandbox thật nào đi
+  qua đường mới; "Sapo lỗi thật rồi job tự thử lại" chỉ có unit test (không có nhánh Neon riêng để thử); thư `sapo_gave_up` cần
+  `ALERT_EMAIL`, chưa biết đã đặt.
+- **PR 6b, lỗi nhỏ biết trước và để lại:** tải lại `/success` của một đơn đang `sapo_error`/`processing` tốn một lần thử của job và
+  bỏ qua thời gian lùi; job và việc hỏi VNPAY dùng chung ngân sách 20 giây của sweep; nếu `scripts/migrate.mjs` lỗi thì build vẫn
+  thành công và 6b âm thầm quay về đường cũ — sau khi deploy phải xem log build Vercel có dòng "migrate: schema is up to date".

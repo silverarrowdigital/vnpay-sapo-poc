@@ -78,6 +78,25 @@ describe("sendAlert", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("sends the give-up mail even when 'sapo_failed' for the same order already used the hour", async () => {
+    expect(await sendAlert("sapo_failed", REF)).toBe(true);
+    expect(await sendAlert("sapo_failed", REF)).toBe(false); // the hourly limit, working as intended
+    expect(await sendAlert("sapo_gave_up", REF, { reason: "Sapo answered HTTP 503; gave up after 8 tries" })).toBe(true);
+    const gaveUp = sent(1);
+    expect(gaveUp.subject).toContain("CẦN TẠO ĐƠN THỦ CÔNG");
+    // A hand-made order must carry the tag, or a replay / page reload can make a second one.
+    expect(gaveUp.text).toContain(`GẮN TAG vnpay-${REF}`);
+    // It must not tell the owner to wait for a VNPAY retry that will not come.
+    expect(gaveUp.text).not.toContain("tối đa 10 lần) và hệ thống tự thử lại");
+    expect(gaveUp.text).toContain("KHÔNG còn tự thử lại");
+  });
+
+  it("tells the truth about who retries in the ordinary Sapo-failure mail", async () => {
+    await sendAlert("sapo_failed", REF);
+    expect(sent(0).text).toContain("job nền");
+    expect(sent(0).text).toContain(`tag vnpay-${REF}`);
+  });
+
   it("gives each kind the next steps that are true for it", async () => {
     await sendAlert("sapo_failed", REF);
     await sendAlert("paid_no_order", REF);

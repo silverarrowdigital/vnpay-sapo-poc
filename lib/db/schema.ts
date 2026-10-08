@@ -106,7 +106,12 @@ export const outboxJobs = pgTable(
     kind: text("kind").notNull(),
     orderId: uuid("order_id").references(() => orders.id),
     payload: jsonb("payload"),
-    /** pending | running | done | failed */
+    /**
+     * One job per piece of work, enforced by the database: `create_sapo_order:<txnRef>`. A repeated IPN
+     * inserts with ON CONFLICT DO NOTHING on this, so it can never queue a second Sapo order (PR 6b).
+     */
+    dedupeKey: text("dedupe_key"),
+    /** pending | done | failed (`running` and `locked_until` are unused: the Redis claim serialises the work) */
     state: text("state").notNull().default("pending"),
     runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
     attempts: integer("attempts").notNull().default(0),
@@ -116,7 +121,7 @@ export const outboxJobs = pgTable(
     createdAt: now(),
     doneAt: timestamp("done_at", { withTimezone: true }),
   },
-  (t) => [index("outbox_jobs_due_idx").on(t.state, t.runAfter)],
+  (t) => [index("outbox_jobs_due_idx").on(t.state, t.runAfter), uniqueIndex("outbox_jobs_dedupe_key_unique").on(t.dedupeKey)],
 );
 
 /** Which Sapo order a ledger order became. One order, one Sapo order: the primary key enforces it. */
