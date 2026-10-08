@@ -55,13 +55,9 @@ export default function ImageSlider({ images, aspect }: { images: SliderImage[];
         style={{ ["--slide-aspect" as string]: ASPECT[aspect] }}
       >
         {images.map((image, i) => (
-          <li
-            key={`${image.url}-${i}`}
-            className="slider-slide"
-            role="group"
-            aria-roledescription="slide"
-            aria-label={`${i + 1} / ${images.length}`}
-          >
+          <li key={`${image.url}-${i}`} className="slider-slide">
+            {/* The slide's group role sits on an inner element: a <li> that takes another role stops being a list item, and a list may hold only list items. */}
+            <div role="group" aria-roledescription="slide" aria-label={`${i + 1} / ${images.length}`}>
             {/* eslint-disable-next-line @next/next/no-img-element -- remote Sanity CDN, no loader configured */}
             <img
               src={sized(image.url, 1024)}
@@ -74,6 +70,7 @@ export default function ImageSlider({ images, aspect }: { images: SliderImage[];
               loading={i === 0 ? "eager" : "lazy"}
             />
             {image.caption !== undefined && <p className="slider-caption">{image.caption}</p>}
+            </div>
           </li>
         ))}
       </ul>

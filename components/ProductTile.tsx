@@ -13,7 +13,17 @@ import { defaultVariant, formatVnd, isGroupSoldOut, priceRange, productHref, typ
  * loading (LCP), and `loading="lazy"` on them made /shop take 3.2 s on a throttled phone (Lighthouse,
  * 2026-10-07). Everything below the fold stays lazy.
  */
-export default function ProductTile({ group, priority = false }: { group: ProductGroup; priority?: boolean }) {
+export default function ProductTile({
+  group,
+  priority = false,
+  headingLevel = 3,
+}: {
+  group: ProductGroup;
+  priority?: boolean;
+  /** The name's heading level: 2 where the page's h1 is directly above the grid (/shop), 3 under a section h2 (home). */
+  headingLevel?: 2 | 3;
+}) {
+  const Heading = headingLevel === 2 ? "h2" : "h3";
   const product = defaultVariant(group);
   const soldOut = isGroupSoldOut(group);
   const { fromVnd, varies } = priceRange(group);
@@ -39,7 +49,7 @@ export default function ProductTile({ group, priority = false }: { group: Produc
           </span>
         )}
       </div>
-      <h3 className="m-0 line-clamp-2 text-[22px] leading-[30px] font-normal group-hover:underline">{product.name}</h3>
+      <Heading className="m-0 line-clamp-2 text-[22px] leading-[30px] font-normal group-hover:underline">{product.name}</Heading>
       <p className="m-0 border-t border-line pt-4 text-xl leading-[26px] tabular-nums">
         {varies && <span className="mr-1">Từ</span>}
         {formatVnd(varies ? fromVnd : product.priceVnd)}

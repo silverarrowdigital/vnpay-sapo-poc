@@ -50,7 +50,7 @@ export default async function ShopPage() {
         <ul className="m-0 grid list-none grid-cols-1 gap-x-12 gap-y-16 p-0 pb-[clamp(64px,6vw,112px)] min-[520px]:grid-cols-2 lg:grid-cols-3">
           {products.map((group, i) => (
             <li key={group.productId}>
-              <ProductTile group={group} priority={i < 2} />
+              <ProductTile group={group} priority={i < 2} headingLevel={2} />
             </li>
           ))}
         </ul>
